@@ -6,7 +6,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { extractPlainText, truncatePreview } from "./content.js";
 
-export type { SessionEntry };
+export type { SessionEntry, SessionInfo };
 
 export interface SessionResponse {
   path: string;
@@ -390,4 +390,14 @@ function extractEntryText(entry: SessionEntry): string {
     default:
       return "";
   }
+}
+
+/**
+ * Find a session by its UUID. Returns the SessionInfo or null if not found.
+ */
+export async function findSessionById(
+  id: string
+): Promise<SessionInfo | null> {
+  const allSessions = await SessionManager.listAll();
+  return allSessions.find((s) => s.id === id) ?? null;
 }

@@ -13,6 +13,23 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
   },
 }));
 
+// Mock the rpc module before importing app
+const mockSpawnRpc = vi.fn<(sessionId: string, sessionDir: string, cwd: string) => boolean>();
+const mockSendCommand = vi.fn<(sessionId: string, command: Record<string, unknown>) => boolean>();
+const mockOnEvent = vi.fn();
+const mockOffEvent = vi.fn();
+const mockIsConnected = vi.fn<(sessionId: string) => boolean>();
+const mockKillAllRpc = vi.fn();
+
+vi.mock("./rpc.js", () => ({
+  spawnRpc: (...args: unknown[]) => mockSpawnRpc(...(args as [string, string, string])),
+  sendCommand: (...args: unknown[]) => mockSendCommand(...(args as [string, Record<string, unknown>])),
+  onEvent: (...args: unknown[]) => mockOnEvent(...args),
+  offEvent: (...args: unknown[]) => mockOffEvent(...args),
+  isConnected: (...args: unknown[]) => mockIsConnected(...(args as [string])),
+  killAllRpc: () => mockKillAllRpc(),
+}));
+
 const { app } = await import("./app.js");
 
 function makeSessionInfo(overrides: Partial<SessionInfo> = {}): SessionInfo {
@@ -157,5 +174,133 @@ describe("GET /api/session/:id/search", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+});
+
+// --- RPC Endpoint Tests ---
+
+describe("POST /api/session/:id/connect", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 for non-existent session", async () => {
+    mockIsConnected.mockReturnValue(false);
+    mockListAll.mockResolvedValue([]);
+
+    const res = await request(app).post("/api/session/nonexistent/connect");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Session not found");
+  });
+
+  it("spawns RPC subprocess and returns connected status", async () => {
+    mockIsConnected.mockReturnValue(false);
+    mockSpawnRpc.mockReturnValue(true);
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001", path: "/mock/sessions/session-001", cwd: "/mock/project" }),
+    ]);
+
+    const res = await request(app).post("/api/session/sess-001/connect");
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("connected");
+    expect(res.body.sessionId).toBe("sess-001");
+    expect(mockSpawnRpc).toHaveBeenCalledWith("sess-001", "/mock/sessions", "/mock/project");
+  });
+
+  it("returns already_connected if session is already active", async () => {
+    mockIsConnected.mockReturnValue(true);
+
+    const res = await request(app).post("/api/session/sess-001/connect");
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("already_connected");
+    expect(mockSpawnRpc).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/session/:id/stream", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 if session is not connected", async () => {
+    mockIsConnected.mockReturnValue(false);
+
+    const res = await request(app).get("/api/session/sess-001/stream");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not connected/i);
+  });
+
+  it("opens SSE connection and registers event listener", () => {
+    return new Promise<void>((resolve, reject) => {
+      mockIsConnected.mockReturnValue(true);
+
+      const req = request(app)
+        .get("/api/session/sess-001/stream")
+        .set("Accept", "text/event-stream");
+
+      req.buffer(true)
+        .parse((res, callback) => {
+          let data = "";
+          res.on("data", (chunk: Buffer) => {
+            data += chunk.toString();
+            if (data.includes('"connected"')) {
+              try {
+                expect(mockOnEvent).toHaveBeenCalledWith("sess-001", expect.any(Function));
+                resolve();
+              } catch (e) {
+                reject(e);
+              }
+              (res as unknown as import("node:stream").Readable).destroy();
+              callback(null, data);
+            }
+          });
+        })
+        .end(() => {
+          // intentionally empty — resolution handled above
+        });
+    });
+  });
+});
+
+describe("GET /api/session/:id/state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 if session is not connected", async () => {
+    mockIsConnected.mockReturnValue(false);
+
+    const res = await request(app).get("/api/session/sess-001/state");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not connected/i);
+  });
+
+  it("returns 500 if sendCommand fails", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(false);
+
+    const res = await request(app).get("/api/session/sess-001/state");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to send/);
+  });
+
+  it("sends get_state command and returns the response", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(true);
+    mockOnEvent.mockImplementation((_sessionId: string, callback: (event: Record<string, unknown>) => void) => {
+      setTimeout(() => callback({ type: "state", model: "claude-3.5-sonnet", streaming: false }), 10);
+    });
+
+    const res = await request(app).get("/api/session/sess-001/state");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ type: "state", model: "claude-3.5-sonnet", streaming: false });
+    expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "get_state" });
   });
 });

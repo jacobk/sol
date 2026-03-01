@@ -24,15 +24,35 @@ From [PRD 001](../PRD/001-sol.md) Section 2.2:
 | File | Purpose |
 |------|---------|
 | `src/rpc.ts` | RPC subprocess manager (spawn, communicate, cleanup) |
-| `src/server.ts` | `/api/session/:id/connect`, `/api/session/:id/stream` (SSE), and RPC proxy endpoints |
+| `src/app.ts` | `/api/session/:id/connect`, `/api/session/:id/stream` (SSE), `/api/session/:id/state` endpoints |
+| `src/server.ts` | Server startup and graceful shutdown (kills all RPC subprocesses on SIGTERM/SIGINT) |
 
 ### Data Flow
 
-{To be filled during implementation.}
+```
+Browser (POST /connect) → Express → spawnRpc() → pi --mode rpc subprocess
+Browser (GET /stream)   → Express → SSE connection ← onEvent() ← subprocess stdout (JSON lines)
+Browser (GET /state)    → Express → sendCommand({type:"get_state"}) → subprocess stdin
+                                  ← onEvent() listener ← subprocess stdout → JSON response
+```
+
+1. User connects: `POST /api/session/:id/connect` looks up session via SDK, spawns `pi --mode rpc --session-dir <path>` with session's `cwd`.
+2. SSE stream: `GET /api/session/:id/stream` registers an event listener on the subprocess. JSON lines from stdout are forwarded as SSE `data:` frames.
+3. State query: `GET /api/session/:id/state` sends `get_state` command to stdin, waits for response event, returns it as JSON.
+4. Cleanup: Client disconnect removes listener. If no listeners remain, an idle timer (10 min) starts. On timeout or server shutdown, subprocess is killed (abort + SIGTERM).
 
 ### Key Functions
 
-{To be filled during implementation.}
+| Function | File | Description |
+|----------|------|-------------|
+| `spawnRpc(sessionId, sessionDir, cwd)` | `src/rpc.ts` | Spawns `pi --mode rpc` subprocess, sets up stdout JSON line parsing, tracks in Map |
+| `sendCommand(sessionId, command)` | `src/rpc.ts` | Writes JSON + newline to subprocess stdin |
+| `onEvent(sessionId, callback)` | `src/rpc.ts` | Registers listener for parsed JSON events from stdout |
+| `offEvent(sessionId, callback)` | `src/rpc.ts` | Removes listener, starts idle timer if none remain |
+| `killRpc(sessionId)` | `src/rpc.ts` | Sends abort command, then SIGTERM after 100ms |
+| `killAllRpc()` | `src/rpc.ts` | Terminates all active subprocesses (server shutdown) |
+| `isConnected(sessionId)` | `src/rpc.ts` | Checks if subprocess is active for session |
+| `findSessionById(id)` | `src/sessions.ts` | Looks up SessionInfo by UUID via SDK |
 
 ## Rationale
 
