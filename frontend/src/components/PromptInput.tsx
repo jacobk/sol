@@ -89,7 +89,7 @@ export function PromptInput({
   );
 
   return (
-    <div class={`bg-bg-app border-t border-border-subtle ${className}`}>
+    <div class={`bg-bg-app border-t border-border-subtle pb-[env(safe-area-inset-bottom)] ${className}`}>
       {/* Mode menu (shown on long-press) */}
       {showModeMenu && (
         <div class="flex gap-2 px-4 pt-3 pb-1">

@@ -19,8 +19,8 @@ interface UseAutoScrollResult {
   handleContentChange: () => void;
   /** Manually enable auto-scroll (e.g., when user taps "new messages" pill) */
   enableAutoScroll: () => void;
-  /** Ref to attach to the scroll container (or use window if not set) */
-  containerRef: RefObject<HTMLDivElement>;
+  /** Ref to attach to the scroll container */
+  scrollContainerRef: RefObject<HTMLDivElement>;
   /** Ref to attach to the bottom anchor element */
   bottomRef: RefObject<HTMLDivElement>;
 }
@@ -31,6 +31,8 @@ interface UseAutoScrollResult {
  * - Auto-scroll is ON by default when entering a view
  * - Auto-scroll PAUSES when user scrolls up (detected via scroll direction)
  * - Auto-scroll RESUMES when user manually scrolls to near-bottom or calls enableAutoScroll
+ * 
+ * Works with a container ref (not window scroll) for proper flex layouts.
  */
 export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScrollResult {
   const { bottomThreshold = 100, initialEnabled = true } = options;
@@ -38,27 +40,44 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
   const [isAutoScrolling, setIsAutoScrolling] = useState(initialEnabled);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
-  const containerRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastScrollTopRef = useRef(0);
   const isScrollingProgrammaticallyRef = useRef(false);
 
   /** Check if currently at the bottom of the scroll area */
   const checkIsAtBottom = useCallback((): boolean => {
-    const scrollTop = window.scrollY;
-    const windowHeight = window.innerHeight;
-    const docHeight = document.documentElement.scrollHeight;
-    return docHeight - scrollTop - windowHeight <= bottomThreshold;
+    const container = scrollContainerRef.current;
+    if (!container) return true;
+    
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    return scrollHeight - scrollTop - clientHeight <= bottomThreshold;
   }, [bottomThreshold]);
 
   /** Scroll to the bottom of the container */
   const scrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    const bottom = bottomRef.current;
+    
+    if (!container || !bottom) return;
+    
     isScrollingProgrammaticallyRef.current = true;
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    // Reset the flag after scroll completes (approximate)
+    
+    // Use scrollIntoView for smooth scrolling
+    bottom.scrollIntoView({ behavior: "smooth", block: "end" });
+    
+    // Also set scrollTop as fallback
+    requestAnimationFrame(() => {
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      }
+    });
+    
+    // Reset the flag after scroll completes
     setTimeout(() => {
       isScrollingProgrammaticallyRef.current = false;
-    }, 500);
+      setIsAtBottom(true);
+    }, 300);
   }, []);
 
   /** Enable auto-scroll and scroll to bottom */
@@ -70,14 +89,20 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
   /** Called when new content is added — auto-scrolls if enabled */
   const handleContentChange = useCallback(() => {
     if (isAutoScrolling) {
-      scrollToBottom();
+      // Use requestAnimationFrame to ensure DOM has updated
+      requestAnimationFrame(() => {
+        scrollToBottom();
+      });
     }
   }, [isAutoScrolling, scrollToBottom]);
 
-  // Handle scroll events to detect user scroll direction
+  // Handle scroll events on the container
   useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
     const handleScroll = (): void => {
-      const currentScrollTop = window.scrollY;
+      const currentScrollTop = container.scrollTop;
       const atBottom = checkIsAtBottom();
 
       setIsAtBottom(atBottom);
@@ -92,7 +117,7 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
       const scrollDelta = currentScrollTop - lastScrollTopRef.current;
       lastScrollTopRef.current = currentScrollTop;
 
-      // User scrolled up — pause auto-scroll
+      // User scrolled up significantly — pause auto-scroll
       if (scrollDelta < -10 && isAutoScrolling) {
         setIsAutoScrolling(false);
       }
@@ -103,14 +128,21 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
       }
     };
 
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
   }, [isAutoScrolling, checkIsAtBottom]);
 
-  // Check initial scroll position
+  // Check initial scroll position and scroll to bottom on mount
   useEffect(() => {
-    setIsAtBottom(checkIsAtBottom());
-  }, [checkIsAtBottom]);
+    const container = scrollContainerRef.current;
+    if (container && initialEnabled) {
+      // Scroll to bottom on initial mount
+      requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight;
+        setIsAtBottom(true);
+      });
+    }
+  }, [initialEnabled]);
 
   return {
     isAutoScrolling,
@@ -118,7 +150,7 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
     scrollToBottom,
     handleContentChange,
     enableAutoScroll,
-    containerRef,
+    scrollContainerRef,
     bottomRef,
   };
 }

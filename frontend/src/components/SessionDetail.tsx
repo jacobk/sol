@@ -1,10 +1,10 @@
 import type { JSX } from "preact";
-import { useState, useEffect, useCallback, useMemo } from "preact/hooks";
+import { useState, useEffect, useCallback, useMemo, useRef } from "preact/hooks";
 import {
   Badge,
   Body,
+  BottomSheet,
   ChatBubble,
-  CodeText,
   Container,
   IconButton,
   MarkdownRenderer,
@@ -30,11 +30,15 @@ import { PromptInput } from "./PromptInput.js";
 import { MobileComposer } from "./MobileComposer.js";
 import { StreamingMessageContainer } from "./StreamingMessage.js";
 import { ModelSwitcher } from "./ModelSwitcher.js";
-import { stripAnsi } from "../utils/text.js";
+
 import { useAutoScroll } from "../hooks/useAutoScroll.js";
 import { usePromptState } from "../hooks/usePromptState.js";
 import type { HistoryMessage } from "./HistoryPickerSheet.js";
 import { ForkActionSheet } from "./ForkActionSheet.js";
+import { 
+  BashExecutionBubble as SharedBashBubble, 
+  ToolResultBubble as SharedToolBubble 
+} from "./ToolDisplay.js";
 
 /** Session entry types mirroring the backend API response */
 
@@ -210,6 +214,46 @@ interface SessionDetailProps {
 /** Max characters before a message is considered "long" and collapsed by default */
 const COLLAPSE_THRESHOLD = 300;
 
+/** Conversation filter modes matching pi CLI */
+type ConversationFilter = "all" | "no-tools" | "user" | "labeled";
+
+/** Filter labels for display */
+const FILTER_LABELS: Record<ConversationFilter, string> = {
+  "all": "All",
+  "no-tools": "No Tools",
+  "user": "User",
+  "labeled": "Labeled",
+};
+
+/** All filter options in order */
+const FILTER_OPTIONS: ConversationFilter[] = ["all", "no-tools", "user", "labeled"];
+
+/** Filter entries based on the selected filter mode */
+function filterEntries(entries: SessionEntry[], filter: ConversationFilter): SessionEntry[] {
+  switch (filter) {
+    case "no-tools":
+      // Hide tool results and bash executions
+      return entries.filter(e => {
+        if (e.type !== "message") return true;
+        const role = e.message.role;
+        return role !== "toolResult" && role !== "bashExecution";
+      });
+    case "user":
+      // Show only user messages
+      return entries.filter(e => 
+        e.type === "message" && e.message.role === "user"
+      );
+    case "labeled":
+      // Show only labeled entries (entries with type "label" or that have labels)
+      // Note: Label entries reference other entries, so we show entries that are labeled
+      return entries.filter(e => e.type === "label");
+    case "all":
+    default:
+      // Show all renderable entries
+      return entries.filter(e => isRenderable(e));
+  }
+}
+
 function formatCost(cost: number): string {
   if (cost === 0) return "$0";
   if (cost < 0.01) return `$${cost.toFixed(4)}`;
@@ -234,8 +278,8 @@ function assistantHasTextContent(content: ContentBlock[]): boolean {
 
 /**
  * Determine whether a message entry should be collapsed by default.
- * User and short assistant text messages stay expanded.
- * Tool results, bash executions, and long messages are collapsed.
+ * User and assistant messages are NEVER collapsed (per PRD 3.2).
+ * Tool results, bash executions, and summaries are collapsed.
  */
 function shouldCollapseByDefault(entry: SessionEntry): boolean {
   if (entry.type !== "message") {
@@ -247,13 +291,13 @@ function shouldCollapseByDefault(entry: SessionEntry): boolean {
 
   switch (msg.role) {
     case "user":
-      // User messages: collapse only if very long
-      return getMessageTextLength(entry) > COLLAPSE_THRESHOLD;
-    case "assistant": {
-      // Assistant messages: collapse if long or contains only tool calls
+      // User messages: NEVER collapse (per PRD 3.2)
+      return false;
+    case "assistant":
+      // Assistant messages: NEVER collapse (per PRD 3.2)
+      // Skip assistant messages with no text content (only tool calls)
       if (!assistantHasTextContent(msg.content)) return true;
-      return getMessageTextLength(entry) > COLLAPSE_THRESHOLD;
-    }
+      return false;
     case "toolResult":
     case "bashExecution":
       // Tool results and bash: always collapsed per PRD 3.2
@@ -418,10 +462,8 @@ function ContentBlocks({ blocks, searchQuery, useMarkdown = false }: { blocks: E
               </div>
             );
           case "thinking": {
-            // Thinking text — inline muted italic like pi CLI
-            // Short thinking shown inline, long thinking collapsible
+            // Thinking text — always inline muted italic (per PRD 3.2, matches pi CLI)
             const thinkingText = block.text.trim();
-            const isLong = thinkingText.length > 200 || thinkingText.split("\n").length > 3;
             
             if (block.redacted) {
               return (
@@ -431,21 +473,7 @@ function ContentBlocks({ blocks, searchQuery, useMarkdown = false }: { blocks: E
               );
             }
             
-            if (isLong) {
-              // Long thinking — collapsible
-              return (
-                <details key={i} class="mt-1">
-                  <summary class="text-sm text-text-muted/60 italic cursor-pointer select-none">
-                    {thinkingText.slice(0, 100)}…
-                  </summary>
-                  <div class="mt-1 text-sm text-text-muted/60 italic whitespace-pre-wrap break-words">
-                    <HighlightText text={thinkingText} query={searchQuery} />
-                  </div>
-                </details>
-              );
-            }
-            
-            // Short thinking — inline
+            // Always render thinking inline — no collapse
             return (
               <div key={i} class="text-sm text-text-muted/60 italic whitespace-pre-wrap break-words">
                 <HighlightText text={thinkingText} query={searchQuery} />
@@ -484,319 +512,39 @@ function AssistantMeta({ message }: { message: AssistantMessage }): JSX.Element 
   );
 }
 
-/** Number of output lines to show in preview */
-const BASH_PREVIEW_LINES = 5;
-
 /**
- * Bash execution — terminal-style rendering.
- * 
- * Design: Clear command display with scrollable output
- * - Command prominently shown with $ prefix
- * - Output in scrollable container (horizontal scroll for long lines)
- * - ANSI escape sequences stripped
+ * Wrapper for BashExecutionMessage → SharedBashBubble.
+ * Uses the shared terminal-style component from ToolDisplay.tsx.
  */
 function BashExecutionBubble({ message }: { message: BashExecutionMessage }): JSX.Element {
-  const [expanded, setExpanded] = useState(false);
-
-  // Strip ANSI codes and split output into lines
-  const cleanOutput = message.output ? stripAnsi(message.output) : "";
-  const outputLines = cleanOutput ? cleanOutput.split("\n") : [];
-  const hasMoreOutput = outputLines.length > BASH_PREVIEW_LINES;
-  const previewLines = outputLines.slice(0, BASH_PREVIEW_LINES);
-  const hiddenLines = outputLines.length - BASH_PREVIEW_LINES;
-
-  // Status flags
-  const hasError = message.exitCode !== undefined && message.exitCode !== 0;
-  const wasCancelled = message.cancelled;
-
   return (
-    <div class="my-2">
-      {/* Command — prominent, scrollable for long commands */}
-      <div class="font-mono text-sm bg-surface rounded-t px-3 py-2 overflow-x-auto">
-        <span class="text-accent-text font-bold select-none">$ </span>
-        <span class="text-text-primary whitespace-pre">{message.command}</span>
-        {hasError && (
-          <span class="text-state-error ml-2">(exit {message.exitCode})</span>
-        )}
-        {wasCancelled && (
-          <span class="text-state-warning ml-2">(cancelled)</span>
-        )}
-      </div>
-
-      {/* Output — scrollable container */}
-      {cleanOutput && (
-        <div class="bg-surface-2 rounded-b border-t border-border-subtle">
-          {expanded ? (
-            // Full output — scrollable both directions
-            <div class="font-mono text-xs text-text-muted p-3 max-h-96 overflow-auto">
-              <pre class="whitespace-pre">{cleanOutput}</pre>
-            </div>
-          ) : (
-            // Preview output — tappable to expand
-            <button
-              type="button"
-              onClick={() => setExpanded(true)}
-              class="w-full text-left font-mono text-xs text-text-muted p-3 active:bg-border-subtle/50 transition-colors"
-            >
-              <pre class="whitespace-pre overflow-x-auto">{previewLines.join("\n")}</pre>
-              {hasMoreOutput && (
-                <div class="text-accent-text mt-1">
-                  … {hiddenLines} more lines — tap to expand
-                </div>
-              )}
-            </button>
-          )}
-          {expanded && hasMoreOutput && (
-            <div class="px-3 pb-2 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setExpanded(false)}
-                class="text-xs text-text-muted active:text-text-primary"
-              >
-                ▲ collapse
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Preview line counts per tool type */
-const TOOL_PREVIEW_LINES: Record<string, number> = {
-  read: 10,
-  write: 10,
-  edit: 50, // Diffs can be longer
-  ls: 20,
-  find: 20,
-  grep: 15,
-  webfetch: 10,
-  default: 10,
-};
-
-/** Tool-specific header parsing from content */
-interface ToolHeader {
-  title: string;
-  subtitle?: string;
-}
-
-/**
- * Parse tool result content to extract useful header info.
- * 
- * NOTE: toolResult entries don't include original arguments (path, command, etc).
- * We try to parse them from the content text where possible.
- */
-function parseToolHeader(toolName: string, content: string): ToolHeader {
-  const lines = content.split("\n");
-  const firstLine = (lines[0] || "").trim();
-
-  switch (toolName) {
-    case "bash": {
-      // For bash, the first line of output might give context
-      // But we don't have the command - just show "bash" with preview of output
-      if (firstLine) {
-        const preview = firstLine.length > 50 ? firstLine.slice(0, 50) + "…" : firstLine;
-        return { title: "bash", subtitle: preview };
-      }
-      return { title: "bash" };
-    }
-
-    case "read": {
-      // Content IS the file contents - we don't have the path
-      // Just show "read" with line count
-      const lineCount = lines.length;
-      return { title: "read", subtitle: `${lineCount} lines` };
-    }
-
-    case "write": {
-      // Content format: "Successfully wrote X bytes to {path}"
-      const writeMatch = content.match(/(?:wrote|written)\s+\d+\s+bytes\s+to\s+([^\s]+)/i);
-      if (writeMatch) {
-        return { title: writeMatch[1] };
-      }
-      // Fallback: "Wrote to {path}" or just path
-      const pathMatch = content.match(/(?:to|wrote)\s+([\/\w\-_.]+\.\w+)/i);
-      if (pathMatch) {
-        return { title: pathMatch[1] };
-      }
-      return { title: "write" };
-    }
-
-    case "edit": {
-      // Content format: "Successfully replaced text in {path}."
-      const editMatch = content.match(/(?:replaced|edited)\s+(?:text\s+)?in\s+([^\s.]+)/i);
-      if (editMatch) {
-        return { title: editMatch[1] };
-      }
-      return { title: "edit" };
-    }
-
-    case "ls": {
-      // Content IS the directory listing - we don't have the path
-      const fileCount = lines.filter(l => l.trim()).length;
-      return { title: "ls", subtitle: `${fileCount} items` };
-    }
-
-    case "find": {
-      // Content IS the find results - we don't have the pattern
-      const resultCount = lines.filter(l => l.trim()).length;
-      return { title: "find", subtitle: `${resultCount} results` };
-    }
-
-    case "grep": {
-      // Content IS the grep results
-      const matchCount = lines.filter(l => l.trim()).length;
-      return { title: "grep", subtitle: `${matchCount} matches` };
-    }
-
-    case "webfetch": {
-      // Try to find URL in content
-      const urlMatch = content.match(/(https?:\/\/[^\s]+)/);
-      if (urlMatch) {
-        const url = urlMatch[1].length > 40 ? urlMatch[1].slice(0, 40) + "…" : urlMatch[1];
-        return { title: url };
-      }
-      return { title: "webfetch" };
-    }
-
-    default:
-      return { title: toolName };
-  }
-}
-
-/** Check if content looks like a diff */
-function isDiffContent(content: string): boolean {
-  const lines = content.split("\n").slice(0, 10);
-  return lines.some(line => 
-    line.startsWith("+++") || 
-    line.startsWith("---") || 
-    line.startsWith("@@") ||
-    (line.startsWith("+") && !line.startsWith("+++")) ||
-    (line.startsWith("-") && !line.startsWith("---"))
+    <SharedBashBubble
+      command={message.command}
+      output={message.output}
+      exitCode={message.exitCode}
+      cancelled={message.cancelled}
+      truncated={message.truncated}
+    />
   );
 }
 
 /**
- * Tool result — terminal-style rendering with scrollable output.
- * 
- * Design: Clear tool name with scrollable content
- * - Header shows tool name and parsed path
- * - Content in scrollable container
- * - Diff content gets +/- coloring
+ * Wrapper for ToolResultMessage → SharedToolBubble.
+ * Uses the shared terminal-style component from ToolDisplay.tsx.
  */
 function ToolResultBubble({ message }: { message: ToolResultMessage }): JSX.Element {
-  const [expanded, setExpanded] = useState(false);
-
-  // Extract plain text content and strip ANSI codes
+  // Extract plain text content
   const rawContent = message.content
     .filter((b): b is { type: "text"; text: string } => b.type === "text")
     .map(b => b.text)
     .join("\n");
-  const textContent = stripAnsi(rawContent);
-
-  // Parse header from content
-  const header = parseToolHeader(message.toolName, textContent);
-
-  // Get preview line count for this tool
-  const previewLineCount = TOOL_PREVIEW_LINES[message.toolName] ?? TOOL_PREVIEW_LINES.default;
-
-  // Split content into lines
-  const lines = textContent.split("\n");
-  const hasMoreLines = lines.length > previewLineCount;
-  const displayLines = expanded ? lines : lines.slice(0, previewLineCount);
-  const hiddenLines = lines.length - previewLineCount;
-
-  // Check if this is a diff (for edit tool)
-  const isDiff = message.toolName === "edit" || isDiffContent(textContent);
-
-  // For display: tool name, then title (if different), then subtitle
-  const displayTitle = header.title !== message.toolName ? header.title : "";
 
   return (
-    <div class="my-2">
-      {/* Header — tool name with context info */}
-      <div class="font-mono text-sm bg-surface rounded-t px-3 py-2 flex items-center gap-2 flex-wrap overflow-x-auto">
-        <span class="text-accent-text font-bold">{message.toolName}</span>
-        {displayTitle && (
-          <span class="text-text-primary whitespace-pre">{displayTitle}</span>
-        )}
-        {header.subtitle && (
-          <span class="text-text-muted text-xs">({header.subtitle})</span>
-        )}
-        {message.isError && (
-          <span class="text-state-error text-xs">(error)</span>
-        )}
-      </div>
-
-      {/* Content — scrollable container */}
-      {textContent && (
-        <div class="bg-surface-2 rounded-b border-t border-border-subtle">
-          {expanded ? (
-            // Full content — scrollable both directions
-            <div class="font-mono text-xs text-text-muted p-3 max-h-96 overflow-auto">
-              {isDiff ? (
-                <DiffContent lines={lines} />
-              ) : (
-                <pre class="whitespace-pre">{textContent}</pre>
-              )}
-            </div>
-          ) : (
-            // Preview content — tappable to expand
-            <button
-              type="button"
-              onClick={() => setExpanded(true)}
-              class="w-full text-left font-mono text-xs text-text-muted p-3 active:bg-border-subtle/50 transition-colors"
-            >
-              {isDiff ? (
-                <DiffContent lines={displayLines} />
-              ) : (
-                <pre class="whitespace-pre overflow-x-auto">{displayLines.join("\n")}</pre>
-              )}
-              {hasMoreLines && (
-                <div class="text-accent-text mt-1">
-                  … {hiddenLines} more lines — tap to expand
-                </div>
-              )}
-            </button>
-          )}
-          {expanded && hasMoreLines && (
-            <div class="px-3 pb-2 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setExpanded(false)}
-                class="text-xs text-text-muted active:text-text-primary"
-              >
-                ▲ collapse
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Render diff content with +/- coloring */
-function DiffContent({ lines }: { lines: string[] }): JSX.Element {
-  return (
-    <div class="font-mono overflow-hidden">
-      {lines.map((line, i) => {
-        let colorClass = "text-text-muted";
-        if (line.startsWith("+") && !line.startsWith("+++")) {
-          colorClass = "text-state-success";
-        } else if (line.startsWith("-") && !line.startsWith("---")) {
-          colorClass = "text-state-error";
-        } else if (line.startsWith("@@")) {
-          colorClass = "text-accent-text";
-        }
-        return (
-          <div key={i} class={`${colorClass} whitespace-pre-wrap break-all`}>
-            {line}
-          </div>
-        );
-      })}
-    </div>
+    <SharedToolBubble
+      toolName={message.toolName}
+      content={rawContent}
+      isError={message.isError}
+    />
   );
 }
 
@@ -1116,6 +864,8 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
   const [forkSheetOpen, setForkSheetOpen] = useState(false);
   const [forkEntryId, setForkEntryId] = useState<string | null>(null);
   const [forkLoading, setForkLoading] = useState(false);
+  const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("all");
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   // Use the auto-scroll hook
   const {
@@ -1124,6 +874,7 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     scrollToBottom,
     handleContentChange,
     enableAutoScroll,
+    scrollContainerRef,
     bottomRef,
   } = useAutoScroll({ bottomThreshold: 50 });
 
@@ -1245,6 +996,10 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
    */
   const handleSessionEntry = useCallback((rawEntry: Record<string, unknown>) => {
     const entry = rawEntry as unknown as SessionEntry;
+    
+    // Debug: log incoming entries
+    console.log("[SessionDetail] Received session_entry:", entry.type, entry.type === "message" ? (entry as SessionMessageEntry).message?.role : "", entry.id);
+    
     if (!entry.id || !entry.type) return;
 
     setData((prev) => {
@@ -1261,7 +1016,15 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         return { ...prev, [entry.id]: shouldCollapseByDefault(entry) };
       });
     }
-  }, []);
+
+    // Auto-scroll to show the new entry
+    if (isAutoScrolling) {
+      // Small delay to let React render the new entry
+      setTimeout(() => {
+        scrollToBottom();
+      }, 50);
+    }
+  }, [isAutoScrolling, scrollToBottom]);
 
   const fetchTree = useCallback(async () => {
     try {
@@ -1275,10 +1038,25 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     }
   }, [sessionId]);
 
+  // Track if we've done initial scroll
+  const hasInitialScrolled = useRef(false);
+
   useEffect(() => {
     void fetchSession();
     void fetchTree();
   }, [fetchSession, fetchTree]);
+
+  // Scroll to bottom when data first loads
+  useEffect(() => {
+    if (data && loadState === "idle" && !hasInitialScrolled.current) {
+      hasInitialScrolled.current = true;
+      // Give the DOM time to render, then scroll to bottom
+      const timer = setTimeout(() => {
+        scrollToBottom();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [data, loadState, scrollToBottom]);
 
   // Check if this session already has an active RPC connection.
   // Probe the SSE stream endpoint: 404 means not connected, 200 means connected.
@@ -1321,13 +1099,15 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         throw new Error(err.error || `HTTP ${res.status}`);
       }
       setIsRpcConnected(true);
+      // Scroll to bottom after connecting
+      setTimeout(() => scrollToBottom(), 200);
     } catch (err) {
       console.error("Failed to connect:", err);
       setErrorMessage(err instanceof Error ? err.message : "Failed to connect");
     } finally {
       setIsConnecting(false);
     }
-  }, [sessionId]);
+  }, [sessionId, scrollToBottom]);
 
   // Scroll to first search match after data loads
   useEffect(() => {
@@ -1380,12 +1160,13 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
   /** Called during streaming activity — show "new messages" pill if not auto-scrolling */
   const handleStreamActivity = useCallback(() => {
     if (isAutoScrolling) {
-      handleContentChange();
+      // Directly scroll to bottom during streaming for reliability
+      scrollToBottom();
     } else {
       // Show the "new messages" indicator when auto-scroll is paused
       setHasNewMessages(true);
     }
-  }, [isAutoScrolling, handleContentChange]);
+  }, [isAutoScrolling, scrollToBottom]);
 
   /** Handle tapping the "new messages" pill */
   const handleNewMessagesPillClick = useCallback(() => {
@@ -1543,10 +1324,13 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     return actions;
   }, [isRpcConnected, isConnecting, connectToSession, onOpenFiles, allCollapsed, toggleAll]);
 
+  // Calculate input height for floating buttons positioning
+  const inputHeightClass = isRpcConnected ? "bottom-20" : "bottom-6";
+
   return (
-    <div class="min-h-screen bg-bg-app" style="-webkit-overflow-scrolling: touch;">
-      {/* Header — minimal with back button and title */}
-      <div class="sticky top-0 z-10 bg-bg-app border-b border-border-subtle">
+    <div class="h-dvh flex flex-col bg-bg-app">
+      {/* Header — fixed at top, never scrolls */}
+      <div class="flex-shrink-0 z-10 bg-bg-app border-b border-border-subtle">
         <Container class="py-3 flex items-center gap-3">
           <IconButton
             label="Back"
@@ -1562,6 +1346,16 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
           {isRpcConnected && (
             <Badge variant="accent">Live</Badge>
           )}
+          <button
+            type="button"
+            onClick={() => setFilterSheetOpen(true)}
+            class="min-h-[var(--spacing-touch)] min-w-[var(--spacing-touch)] flex items-center justify-center"
+            aria-label="Change filter"
+          >
+            <Badge variant={conversationFilter === "all" ? "default" : "accent"}>
+              {FILTER_LABELS[conversationFilter]}
+            </Badge>
+          </button>
           {data && (
             <ModelSwitcher
               sessionId={sessionId}
@@ -1580,111 +1374,117 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         </div>
       )}
 
-      {/* Content */}
-      <Container class="py-4">
-        {loadState === "loading" && !data && (
-          <div class="flex justify-center py-16">
-            <Metadata>Loading session…</Metadata>
-          </div>
-        )}
+      {/* Scrollable content area — takes remaining space, scrolls independently */}
+      <div 
+        ref={scrollContainerRef}
+        class="flex-1 overflow-y-auto overscroll-contain"
+        style="-webkit-overflow-scrolling: touch;"
+      >
+        <Container class="py-4">
+          {loadState === "loading" && !data && (
+            <div class="flex justify-center py-16">
+              <Metadata>Loading session…</Metadata>
+            </div>
+          )}
 
-        {loadState === "error" && (
-          <div class="bg-state-error/10 text-state-error rounded-lg p-4">
-            <Body class="text-state-error">
-              {errorMessage}
-            </Body>
-          </div>
-        )}
+          {loadState === "error" && (
+            <div class="bg-state-error/10 text-state-error rounded-lg p-4">
+              <Body class="text-state-error">
+                {errorMessage}
+              </Body>
+            </div>
+          )}
 
-        {data && (
-          <Stack direction="vertical" gap={2}>
-            {data.entries.map((entry) => {
-              if (!isRenderable(entry)) return null;
-              const rendered = renderEntry(entry, searchQuery);
-              if (!rendered) return null;
-              const branchCount = childCountMap.get(entry.id) ?? 0;
+          {data && (
+            <Stack direction="vertical" gap={2}>
+              {filterEntries(data.entries, conversationFilter).map((entry) => {
+                // filterEntries already handles filtering, just render
+                const rendered = renderEntry(entry, searchQuery);
+                if (!rendered) return null;
+                const branchCount = childCountMap.get(entry.id) ?? 0;
 
-              // Tool-related entries use their own bubbles with built-in expand/collapse
-              const isSelfContainedTool = entry.type === "message" && 
-                (entry.message.role === "bashExecution" || entry.message.role === "toolResult");
+                // Tool-related entries use their own bubbles with built-in expand/collapse
+                const isSelfContainedTool = entry.type === "message" && 
+                  (entry.message.role === "bashExecution" || entry.message.role === "toolResult");
 
-              // Determine if this entry is swipeable for fork (user messages only)
-              // Pi's fork command only works with user message entry IDs
-              const isSwipeable = isRpcConnected && entry.type === "message" && 
-                entry.message.role === "user";
+                // Determine if this entry is swipeable for fork (user messages only)
+                // Pi's fork command only works with user message entry IDs
+                const isSwipeable = isRpcConnected && entry.type === "message" && 
+                  entry.message.role === "user";
 
-              const messageContent = (
-                <>
-                  {isSelfContainedTool ? (
-                    // Render directly - BashExecutionBubble/ToolResultBubble handle their own state
-                    rendered
-                  ) : (
-                    <CollapsibleEntry
-                      entry={entry}
-                      collapsed={collapsedMap[entry.id] ?? false}
-                      onToggle={() => toggleEntry(entry.id)}
-                    >
-                      {rendered}
-                    </CollapsibleEntry>
-                  )}
-                  {branchCount > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => openBranchSelector(entry.id)}
-                      class="mt-1 min-h-[var(--spacing-touch)] flex items-center gap-2 px-3 py-1 active:opacity-70 transition-opacity duration-100"
-                      aria-label={`${branchCount} branches from this point`}
-                    >
-                      <Badge variant="accent">{branchCount} branches</Badge>
-                    </button>
-                  )}
-                </>
-              );
+                const messageContent = (
+                  <>
+                    {isSelfContainedTool ? (
+                      // Render directly - BashExecutionBubble/ToolResultBubble handle their own state
+                      rendered
+                    ) : (
+                      <CollapsibleEntry
+                        entry={entry}
+                        collapsed={collapsedMap[entry.id] ?? false}
+                        onToggle={() => toggleEntry(entry.id)}
+                      >
+                        {rendered}
+                      </CollapsibleEntry>
+                    )}
+                    {branchCount > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => openBranchSelector(entry.id)}
+                        class="mt-1 min-h-[var(--spacing-touch)] flex items-center gap-2 px-3 py-1 active:opacity-70 transition-opacity duration-100"
+                        aria-label={`${branchCount} branches from this point`}
+                      >
+                        <Badge variant="accent">{branchCount} branches</Badge>
+                      </button>
+                    )}
+                  </>
+                );
 
-              return (
-                <div key={entry.id}>
-                  {isSwipeable ? (
-                    <SwipeableRow
-                      actions={
-                        <button
-                          type="button"
-                          onClick={() => openForkSheet(entry.id)}
-                          class="h-full w-full bg-accent text-on-accent flex items-center justify-center font-medium text-sm active:bg-accent-hover"
-                        >
-                          Fork
-                        </button>
-                      }
-                    >
-                      {messageContent}
-                    </SwipeableRow>
-                  ) : (
-                    messageContent
-                  )}
-                </div>
-              );
-            })}
-          </Stack>
-        )}
+                return (
+                  <div key={entry.id}>
+                    {isSwipeable ? (
+                      <SwipeableRow
+                        actions={
+                          <button
+                            type="button"
+                            onClick={() => openForkSheet(entry.id)}
+                            class="h-full w-full bg-accent text-on-accent flex items-center justify-center font-medium text-sm active:bg-accent-hover"
+                          >
+                            Fork
+                          </button>
+                        }
+                      >
+                        {messageContent}
+                      </SwipeableRow>
+                    ) : (
+                      messageContent
+                    )}
+                  </div>
+                );
+              })}
+            </Stack>
+          )}
 
-        {/* Bottom anchor for scroll-to-bottom — with padding for prompt input */}
-        <div ref={bottomRef} class={isRpcConnected ? "pb-28" : "pb-4"} />
-      </Container>
+          {/* Streaming messages (active session only) */}
+          {isRpcConnected && (
+            <div class="mt-4">
+              <StreamingMessageContainer
+                sessionId={sessionId}
+                onStreamingChange={setIsStreaming}
+                onNewMessage={handleNewStreamingMessage}
+                onStreamActivity={handleStreamActivity}
+                onSessionEntry={handleSessionEntry}
+              />
+            </div>
+          )}
 
-      {/* Streaming messages (active session only) */}
-      {isRpcConnected && (
-        <Container class="pb-4">
-          <StreamingMessageContainer
-            sessionId={sessionId}
-            onStreamingChange={setIsStreaming}
-            onNewMessage={handleNewStreamingMessage}
-            onStreamActivity={handleStreamActivity}
-            onSessionEntry={handleSessionEntry}
-          />
+          {/* Bottom anchor for scroll-to-bottom */}
+          <div ref={bottomRef} class="h-4" />
         </Container>
-      )}
+      </div>
 
-      {/* Prompt input (active session only) */}
+      {/* Prompt input — fixed at bottom of flex container, never overlaps content */}
       {isRpcConnected && (
-        <div class="fixed bottom-0 left-0 right-0 z-20">
+        <div class="flex-shrink-0 z-20">
           <PromptInput
             promptState={promptState}
             isStreaming={isStreaming}
@@ -1711,7 +1511,7 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         <button
           type="button"
           onClick={handleNewMessagesPillClick}
-          class={`fixed ${isRpcConnected ? "bottom-20" : "bottom-6"} left-1/2 -translate-x-1/2 z-20 bg-accent text-on-accent rounded-full px-4 py-2 text-sm font-medium shadow-lg active:bg-accent-hover transition-colors duration-100`}
+          class={`fixed ${inputHeightClass} left-1/2 -translate-x-1/2 z-30 bg-accent text-on-accent rounded-full px-4 py-2 text-sm font-medium shadow-lg active:bg-accent-hover transition-colors duration-100`}
           aria-label="Jump to new messages"
         >
           New messages ↓
@@ -1723,7 +1523,7 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         <button
           type="button"
           onClick={scrollToBottom}
-          class={`fixed ${isRpcConnected ? "bottom-20" : "bottom-6"} right-6 z-20 bg-accent text-on-accent rounded-full w-12 h-12 flex items-center justify-center shadow-lg active:bg-accent-hover transition-colors duration-100`}
+          class={`fixed ${inputHeightClass} right-6 z-30 bg-accent text-on-accent rounded-full w-12 h-12 flex items-center justify-center shadow-lg active:bg-accent-hover transition-colors duration-100`}
           aria-label="Jump to bottom"
         >
           ↓
@@ -1757,6 +1557,33 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         onFork={handleFork}
         loading={forkLoading}
       />
+
+      {/* Filter selection BottomSheet */}
+      <BottomSheet
+        open={filterSheetOpen}
+        onClose={() => setFilterSheetOpen(false)}
+        title="Filter Messages"
+      >
+        <div class="space-y-1">
+          {FILTER_OPTIONS.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => {
+                setConversationFilter(option);
+                setFilterSheetOpen(false);
+              }}
+              class={`w-full text-left px-4 py-3 rounded-lg min-h-[var(--spacing-touch)] transition-colors duration-100 ${
+                conversationFilter === option
+                  ? "bg-accent/20 text-accent-text"
+                  : "text-text-primary active:bg-surface-2"
+              }`}
+            >
+              {FILTER_LABELS[option]}
+            </button>
+          ))}
+        </div>
+      </BottomSheet>
     </div>
   );
 }

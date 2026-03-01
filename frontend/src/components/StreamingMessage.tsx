@@ -1,6 +1,7 @@
 import type { JSX } from "preact";
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 import { ChatBubble, Badge, Metadata, MarkdownRenderer } from "./ui/index.js";
+import { StreamingToolDisplay } from "./ToolDisplay.js";
 
 /** Represents a tool execution in progress or completed */
 interface ToolExecution {
@@ -8,6 +9,8 @@ interface ToolExecution {
   toolName: string;
   status: "running" | "done" | "error";
   content?: string;
+  /** For bash tools, the command being executed */
+  command?: string;
 }
 
 /** A single streaming message being assembled from SSE events */
@@ -73,6 +76,12 @@ function StreamingMessageBubble({
 
   return (
     <ChatBubble role="assistant">
+      {/* Thinking content - always visible inline (per PRD 3.2) */}
+      {message.thinkingContent && (
+        <div class="text-sm text-text-muted/60 italic whitespace-pre-wrap break-words mb-2">
+          {message.thinkingContent}
+        </div>
+      )}
       {message.isComplete ? (
         // Render markdown when complete
         <MarkdownRenderer content={message.textContent} />
@@ -95,46 +104,6 @@ function StreamingMessageBubble({
   );
 }
 
-/** Compact tool execution indicator — collapsed by default, expandable on tap (no emoji) */
-function ToolExecutionIndicator({
-  tool,
-}: {
-  tool: ToolExecution;
-}): JSX.Element {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <button
-      type="button"
-      onClick={() => setExpanded(!expanded)}
-      class="w-full text-left bg-surface rounded-lg px-4 py-2 border-l-3 border-l-role-tool active:bg-surface-2 transition-colors duration-100 min-h-[var(--spacing-touch)]"
-    >
-      <div class="flex items-center gap-2">
-        <span class="text-xs font-medium text-text-muted uppercase tracking-wide">
-          {tool.toolName}
-        </span>
-        {tool.status === "running" && (
-          <span class="w-2 h-2 rounded-full bg-accent animate-pulse" />
-        )}
-        {tool.status === "done" && (
-          <Metadata>Done</Metadata>
-        )}
-        {tool.status === "error" && (
-          <Badge variant="error">Error</Badge>
-        )}
-        <span class="ml-auto text-xs text-text-muted">
-          {expanded ? "Hide" : "Show"}
-        </span>
-      </div>
-      {expanded && tool.content && (
-        <div class="mt-2 text-sm text-text-muted whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
-          {tool.content}
-        </div>
-      )}
-    </button>
-  );
-}
-
 /**
  * Extract plain text from a content array (as returned in pi RPC messages).
  * Content may be a string or array of {type, text} blocks.
@@ -146,6 +115,17 @@ function extractTextFromContent(content: unknown): string {
     .filter((b) => b.type === "text" && typeof b.text === "string")
     .map((b) => b.text as string)
     .join("");
+}
+
+/**
+ * Extract bash command from tool call arguments if available.
+ */
+function extractBashCommand(args: unknown): string | undefined {
+  if (typeof args === "object" && args !== null) {
+    const a = args as Record<string, unknown>;
+    if (typeof a.command === "string") return a.command;
+  }
+  return undefined;
 }
 
 /**
@@ -162,6 +142,7 @@ export function StreamingMessageContainer({
   const [currentMessage, setCurrentMessage] = useState<StreamingMessageData | null>(null);
   const [tools, setTools] = useState<ToolExecution[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
+  const [agentStatus, setAgentStatus] = useState<"idle" | "working">("idle");
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -216,6 +197,7 @@ export function StreamingMessageContainer({
             isComplete: false,
           });
           setTools([]);
+          setAgentStatus("working");
           onStreamingChange(true);
           onStreamActivity?.();
           break;
@@ -299,6 +281,7 @@ export function StreamingMessageContainer({
             if (!prev) return prev;
             return { ...prev, isComplete: true };
           });
+          setAgentStatus("idle");
           onStreamingChange(false);
           onNewMessage?.();
           break;
@@ -306,9 +289,12 @@ export function StreamingMessageContainer({
         case "tool_execution_start": {
           const toolId = (data.toolCallId as string) ?? `tool-${Date.now()}`;
           const toolName = (data.toolName as string) ?? "tool";
+          const args = data.args as Record<string, unknown> | undefined;
+          const command = toolName === "bash" ? extractBashCommand(args) : undefined;
+          
           setTools((prev) => [
             ...prev,
-            { id: toolId, toolName, status: "running" },
+            { id: toolId, toolName, status: "running", command },
           ]);
           break;
         }
@@ -350,6 +336,7 @@ export function StreamingMessageContainer({
 
         case "rpc_exit":
         case "rpc_error":
+          setAgentStatus("idle");
           onStreamingChange(false);
           setConnectionStatus("disconnected");
           break;
@@ -362,6 +349,7 @@ export function StreamingMessageContainer({
     es.onerror = () => {
       es.close();
       setConnectionStatus("disconnected");
+      setAgentStatus("idle");
       onStreamingChange(false);
 
       // Auto-reconnect with exponential backoff
@@ -390,38 +378,40 @@ export function StreamingMessageContainer({
     };
   }, [connect]);
 
+  // Determine if any tool is currently running
+  const hasRunningTool = tools.some(t => t.status === "running");
+
   return (
     <div class="space-y-3">
       {/* Connection status indicator */}
       {connectionStatus === "connecting" && (
-        <div class="flex items-center gap-2 px-4 py-2">
-          <span class="w-2 h-2 rounded-full bg-accent animate-pulse" />
-          <Metadata>Connecting to session…</Metadata>
-        </div>
+        <StatusIndicator status="connecting" message="Connecting to session…" />
       )}
       {connectionStatus === "disconnected" && (
-        <div class="flex items-center gap-2 px-4 py-2">
-          <span class="w-2 h-2 rounded-full bg-state-error" />
-          <Metadata>Disconnected. Reconnecting…</Metadata>
-        </div>
+        <StatusIndicator status="error" message="Disconnected. Reconnecting…" />
       )}
-      {connectionStatus === "connected" && !currentMessage && tools.length === 0 && (
-        <div class="flex items-center gap-2 px-4 py-2">
-          <span class="w-2 h-2 rounded-full bg-state-success" />
-          <Metadata>Connected — waiting for prompt</Metadata>
-        </div>
+      {connectionStatus === "connected" && agentStatus === "idle" && !currentMessage && tools.length === 0 && (
+        <StatusIndicator status="ready" message="Ready — send a prompt" />
       )}
 
-      {/* Active tool executions */}
+      {/* Active tool executions - using shared terminal-style components */}
       {tools.map((tool) => (
-        <ToolExecutionIndicator key={tool.id} tool={tool} />
+        <StreamingToolDisplay
+          key={tool.id}
+          toolName={tool.toolName}
+          status={tool.status}
+          content={tool.content}
+          command={tool.command}
+        />
       ))}
 
       {/* Current streaming message */}
       {currentMessage && currentMessage.textContent.length > 0 && (
         <StreamingMessageBubble message={currentMessage} />
       )}
-      {currentMessage && !currentMessage.isComplete && currentMessage.textContent.length === 0 && (
+      
+      {/* Thinking/starting indicator when no text yet */}
+      {currentMessage && !currentMessage.isComplete && currentMessage.textContent.length === 0 && !hasRunningTool && (
         <ChatBubble role="assistant">
           <div class="flex items-center gap-2">
             <span class="w-2 h-2 rounded-full bg-accent animate-pulse" />
@@ -431,6 +421,38 @@ export function StreamingMessageContainer({
           </div>
         </ChatBubble>
       )}
+
+      {/* Agent working indicator - show prominently at bottom when agent is active */}
+      {agentStatus === "working" && (
+        <div class="fixed bottom-24 left-1/2 -translate-x-1/2 z-30 bg-accent text-on-accent rounded-full px-4 py-2 text-sm font-medium shadow-lg flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-on-accent animate-pulse" />
+          Agent working…
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Status indicator component for connection/agent state.
+ */
+function StatusIndicator({ 
+  status, 
+  message 
+}: { 
+  status: "connecting" | "ready" | "error"; 
+  message: string;
+}): JSX.Element {
+  const dotColor = {
+    connecting: "bg-accent animate-pulse",
+    ready: "bg-state-success",
+    error: "bg-state-error",
+  }[status];
+
+  return (
+    <div class="flex items-center gap-2 px-4 py-2">
+      <span class={`w-2 h-2 rounded-full ${dotColor}`} />
+      <Metadata>{message}</Metadata>
     </div>
   );
 }
