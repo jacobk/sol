@@ -1,7 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listGroupedSessions } from "./sessions.js";
+import { listGroupedSessions, getSessionById } from "./sessions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +22,21 @@ app.get("/api/sessions", async (_req, res) => {
   } catch (err) {
     console.error("Failed to list sessions:", err);
     res.status(500).json({ error: "Failed to list sessions" });
+  }
+});
+
+// Session detail endpoint
+app.get("/api/session/:id", async (req, res) => {
+  try {
+    const result = await getSessionById(req.params.id);
+    if (!result) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    console.error("Failed to get session:", err);
+    res.status(500).json({ error: "Failed to get session" });
   }
 });
 

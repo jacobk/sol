@@ -19,16 +19,25 @@ From [PRD 001](../PRD/001-sol.md) Section 2.2:
 
 | File | Purpose |
 |------|---------|
-| `src/server.ts` | `/api/session/:id` endpoint |
-| `public/index.html` | Chat-style message rendering |
+| `src/app.ts` | `/api/session/:id` endpoint |
+| `src/sessions.ts` | `getSessionById()` lookup function |
+| `frontend/src/components/SessionDetail.tsx` | Chat view with role-based rendering |
+| `frontend/src/utils/content.ts` | Content extraction utility |
+| `frontend/src/App.tsx` | Navigation state between list and detail |
 
 ### Data Flow
 
-{To be filled during implementation.}
+1. User taps a session card in `SessionList` → `onSelectSession(id)` → `App` sets `selectedSessionId`
+2. `SessionDetail` mounts, fetches `GET /api/session/:id`
+3. Backend calls `getSessionById()` which scans all sessions for matching UUID, opens via `SessionManager.open()`, returns `getBranch()` entries + `getHeader()`
+4. Frontend maps entries to `ChatBubble` components with role-specific styling
 
 ### Key Functions
 
-{To be filled during implementation.}
+- `getSessionById(id)` — Backend: finds session by UUID, returns branch entries + header
+- `extractAllContent(blocks)` — Frontend: extracts display text from content block arrays
+- `extractPlainText(blocks)` — Frontend: extracts plain text only (for search/previews)
+- `renderEntry(entry)` — Frontend: dispatches to role-specific ChatBubble rendering
 
 ## Rationale
 

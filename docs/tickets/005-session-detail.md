@@ -2,7 +2,7 @@
 
 **Related:** ADR 001, ADR 002, PRD 001 Section 3.2
 **Feature:** [Session Detail View](../features/session-detail.md)
-**Status:** Ready for Implementation (depends on TICKET-003, TICKET-004)
+**Status:** Approved (depends on TICKET-003, TICKET-004)
 **Created:** 2026-03-01
 
 ## Context to Load
@@ -80,3 +80,11 @@ curl http://localhost:8081/api/session/<id> | jq '.entries | length'
 | MODIFY: `src/sessions.ts` | Add session-by-id lookup function |
 | NEW: `frontend/src/components/SessionDetail.tsx` | Chat view with message rendering |
 | NEW: `frontend/src/utils/content.ts` | Content extraction utility |
+
+## Review Feedback
+
+From user, its hard to read the session details. We need to fix the following
+* Collapse all long messages by default. Now it's just a lot of long "read" messages etc. We should focus on text messages between user and agent. But long messages should be trunctated and collapsed.
+* It should be possible to toggle collapse state of all messages
+* It should be possible to copy content of any message
+* As a user a need an easy way to jump to the bottom (newest message)

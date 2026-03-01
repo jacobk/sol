@@ -27,13 +27,18 @@ function projectDisplayName(project: string): string {
   return parts[parts.length - 1] || project;
 }
 
-function SessionCard({ session }: { session: SessionResponse }): JSX.Element {
+interface SessionListProps {
+  onSelectSession: (id: string) => void;
+}
+
+function SessionCard({ session, onSelect }: { session: SessionResponse; onSelect: () => void }): JSX.Element {
   const displayName = session.name || truncate(session.firstMessage, 80) || "Empty session";
 
   return (
     <button
       type="button"
       class="w-full text-left bg-surface rounded-lg p-4 active:bg-surface-2 transition-colors duration-100 min-h-[var(--spacing-touch)]"
+      onClick={onSelect}
     >
       <Stack direction="vertical" gap={2}>
         <Body class="line-clamp-2">{displayName}</Body>
@@ -58,7 +63,7 @@ function EmptyState(): JSX.Element {
   );
 }
 
-export function SessionList(): JSX.Element {
+export function SessionList({ onSelectSession }: SessionListProps): JSX.Element {
   const [groups, setGroups] = useState<GroupedSessions[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -129,7 +134,11 @@ export function SessionList(): JSX.Element {
               </Metadata>
               <Stack direction="vertical" gap={2}>
                 {group.sessions.map((session) => (
-                  <SessionCard key={session.id} session={session} />
+                  <SessionCard
+                    key={session.id}
+                    session={session}
+                    onSelect={() => onSelectSession(session.id)}
+                  />
                 ))}
               </Stack>
             </div>

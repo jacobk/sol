@@ -1,4 +1,9 @@
-import { SessionManager, type SessionInfo } from "@mariozechner/pi-coding-agent";
+import {
+  SessionManager,
+  type SessionInfo,
+  type SessionHeader,
+  type SessionEntry,
+} from "@mariozechner/pi-coding-agent";
 
 export interface SessionResponse {
   path: string;
@@ -70,4 +75,30 @@ export async function listGroupedSessions(): Promise<GroupedSessions[]> {
   });
 
   return result;
+}
+
+export interface SessionDetailResponse {
+  header: SessionHeader | null;
+  entries: SessionEntry[];
+}
+
+/**
+ * Find a session by its UUID and return the current branch entries plus header.
+ * Returns null if no session matches the given ID.
+ */
+export async function getSessionById(
+  id: string
+): Promise<SessionDetailResponse | null> {
+  const allSessions = await SessionManager.listAll();
+  const match = allSessions.find((s) => s.id === id);
+
+  if (!match) {
+    return null;
+  }
+
+  const sm = SessionManager.open(match.path);
+  const header = sm.getHeader();
+  const entries = sm.getBranch();
+
+  return { header, entries };
 }

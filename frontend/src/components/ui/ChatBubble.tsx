@@ -1,38 +1,45 @@
 import type { ComponentChildren, JSX } from "preact";
 
-type ChatRole = "user" | "assistant" | "tool" | "tool-result";
+type ChatRole = "user" | "assistant" | "tool" | "tool-result" | "system";
 
 interface ChatBubbleProps {
   role: ChatRole;
+  label?: string;
   children: ComponentChildren;
   class?: string;
 }
 
-const roleStyles: Record<ChatRole, { border: string; label: string }> = {
+const roleStyles: Record<ChatRole, { border: string; defaultLabel: string }> = {
   user: {
     border: "border-l-role-user",
-    label: "You",
+    defaultLabel: "You",
   },
   assistant: {
     border: "border-l-role-assistant",
-    label: "Assistant",
+    defaultLabel: "Assistant",
   },
   tool: {
     border: "border-l-role-tool",
-    label: "Tool",
+    defaultLabel: "Tool",
   },
   "tool-result": {
     border: "border-l-role-tool-result",
-    label: "Result",
+    defaultLabel: "Result",
+  },
+  system: {
+    border: "border-l-role-system",
+    defaultLabel: "System",
   },
 };
 
 export function ChatBubble({
   role,
+  label,
   children,
   class: className = "",
 }: ChatBubbleProps): JSX.Element {
   const style = roleStyles[role];
+  const displayLabel = label ?? style.defaultLabel;
 
   return (
     <div
@@ -43,7 +50,7 @@ export function ChatBubble({
       `}
     >
       <span class="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5 block">
-        {style.label}
+        {displayLabel}
       </span>
       <div class="text-base text-text-primary">
         {children}
