@@ -33,14 +33,59 @@ Analyze the requirements against the current codebase:
 ### 3. Plan Generation
 Create a plan file in the `.plans/` directory named `{ticket-number}-{ticket-name}-plan.md` (e.g., `.plans/001-setup-auth-plan.md`).
 
-The plan must include:
-- **Title**: Ticket number and name
-- **Objective**: Brief summary of what the plan achieves
-- **Analysis**: Summary of your investigation (what exists, what needs changing, potential risks/edge cases)
-- **Step-by-Step Tasks**: A logical sequence of implementation tasks. Each task should be specific, mentioning target files and the nature of the change.
-- **Verification**: How to verify the implementation works and meets acceptance criteria.
+#### Plan Format (Context-Efficient)
 
-### 4. Final Output
+Keep plans **concise** to minimize context window usage. Use this format:
+
+```markdown
+# {TICKET-NUMBER}: {Title}
+
+## Objective
+One sentence summary.
+
+## Key Findings
+Bullet points only. No prose. Include:
+- Relevant existing code/patterns found
+- Risks or edge cases identified
+- Dependencies
+
+## Tasks
+
+- [ ] **1. {Task title}** — `path/to/file.ts`
+  {One-line description of the change}
+
+- [ ] **2. {Task title}** — `path/to/file.ts`, `other/file.ts`
+  {One-line description}
+
+- [ ] **3. {Task title}**
+  {Description}
+
+## Verification
+- How to test (commands, manual checks)
+```
+
+#### Task Format Rules
+- Use `- [ ]` for pending, `- [x]` for complete
+- Keep each task to 1-2 lines max
+- List affected files inline with the task title
+- Number tasks for easy reference
+- Group related small changes into single tasks
+- Aim for 5-15 tasks total (split large tickets, combine trivial changes)
+
+### 4. Tracking Progress
+
+When resuming work on an existing plan:
+1. Read the plan file first
+2. Find the first unchecked task (`- [ ]`)
+3. After completing a task, mark it done (`- [x]`)
+4. Continue to next unchecked task
+
+This enables any agent (including after compaction) to quickly determine:
+- What's already done
+- What's next
+- What remains
+
+### 5. Final Output
 - Inform the user that the plan has been created at `.plans/{filename}`.
 - Explicitly ask the user for approval to proceed with implementation.
 - **DO NOT proceed with implementation.** Stop and wait for user input.
