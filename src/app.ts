@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { listGroupedSessions, getSessionById, getSessionTree, getSessionBranch, searchSessions, searchSessionEntries, findSessionById } from "./sessions.js";
 import { spawnRpc, sendCommand, onEvent, offEvent, isConnected, killAllRpc, type RpcEventCallback } from "./rpc.js";
 import { startWatching, onEntry, offEntry, isWatching, stopAllWatchers, type SessionEntryCallback } from "./session-watcher.js";
-import { getGitStatus, getFileContent, getGitDiff } from "./files.js";
+import { getGitStatus, getFileContent, getGitDiff, getGitTrackedFiles } from "./files.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -349,6 +349,48 @@ app.get("/api/session/:id/models", (req, res) => {
   }
 });
 
+// Get available commands (skills, slash commands) via RPC
+app.get("/api/session/:id/commands", (req, res) => {
+  const sessionId = req.params.id;
+
+  if (!isConnected(sessionId)) {
+    res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
+    return;
+  }
+
+  const timeout = setTimeout(() => {
+    offEvent(sessionId, listener);
+    res.status(504).json({ error: "Timeout waiting for commands response" });
+  }, 10_000);
+
+  const listener: RpcEventCallback = (event) => {
+    if (event.type === "response" && event.command === "get_commands") {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      if (event.success === false) {
+        res.status(500).json({ error: "RPC command failed", details: event.error });
+        return;
+      }
+      res.json(event);
+      return;
+    }
+    if (event.type === "rpc_exit" || event.type === "rpc_error") {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      res.status(500).json({ error: "RPC subprocess terminated", details: event });
+      return;
+    }
+  };
+
+  onEvent(sessionId, listener);
+  const sent = sendCommand(sessionId, { type: "get_commands" });
+  if (!sent) {
+    clearTimeout(timeout);
+    offEvent(sessionId, listener);
+    res.status(500).json({ error: "Failed to send command to RPC subprocess" });
+  }
+});
+
 // Switch model via RPC
 app.put("/api/session/:id/model", (req, res) => {
   const sessionId = req.params.id;
@@ -451,6 +493,28 @@ app.get("/api/files/:id/content", async (req, res) => {
     }
     console.error("Failed to read file:", err);
     res.status(500).json({ error: "Failed to read file" });
+  }
+});
+
+// Get all git-tracked files in the session's cwd (for file picker)
+app.get("/api/files/:id/tree", async (req, res) => {
+  try {
+    const session = await findSessionById(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    const files = await getGitTrackedFiles(session.cwd);
+    if (files === null) {
+      res.status(404).json({ error: "Session cwd is not a git repository" });
+      return;
+    }
+
+    res.json({ cwd: session.cwd, files });
+  } catch (err) {
+    console.error("Failed to get git tracked files:", err);
+    res.status(500).json({ error: "Failed to get git tracked files" });
   }
 });
 

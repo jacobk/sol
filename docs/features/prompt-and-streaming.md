@@ -57,6 +57,9 @@ From [PRD 001](../PRD/001-sol.md) Section 2.2:
 
 ## Current Limitations
 
-1. No rich input (no markdown preview, no file attachment, no `@` completions — listed as future consideration in PRD).
-2. No prompt history or recall — each prompt is typed fresh.
-3. No offline queuing — if the RPC subprocess is not connected, prompts fail immediately.
+1. No rich input (no markdown preview, no file attachment — inline `@` completions deferred to Mobile Composer feature).
+2. No offline queuing — if the RPC subprocess is not connected, prompts fail immediately.
+
+## Related Features
+
+- [Mobile Composer](mobile-composer.md) - Full-screen prompt editor with template insertion, file completion, and history recall. Addresses limitations #1 and #2 above with a dedicated composition experience.

@@ -11,9 +11,11 @@
     "build:frontend": "cd frontend && npx vite build",
     "build:all": "npm run build && npm run build:frontend",
     "lint": "tsc --noEmit && cd frontend && npx tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && cd frontend && npm test",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:backend": "vitest run",
+    "test:frontend": "cd frontend && npm test"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "latest",

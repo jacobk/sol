@@ -48,11 +48,13 @@ vi.mock("./session-watcher.js", () => ({
 const mockGetGitStatus = vi.fn();
 const mockGetFileContent = vi.fn();
 const mockGetGitDiff = vi.fn();
+const mockGetGitTrackedFiles = vi.fn();
 
 vi.mock("./files.js", () => ({
   getGitStatus: (...args: unknown[]) => mockGetGitStatus(...args),
   getFileContent: (...args: unknown[]) => mockGetFileContent(...args),
   getGitDiff: (...args: unknown[]) => mockGetGitDiff(...args),
+  getGitTrackedFiles: (...args: unknown[]) => mockGetGitTrackedFiles(...args),
 }));
 
 const { app } = await import("./app.js");
@@ -637,5 +639,111 @@ describe("GET /api/files/:id/diff", () => {
     const res = await request(app).get("/api/files/sess-001/diff?path=file.ts");
 
     expect(res.status).toBe(500);
+  });
+});
+
+describe("GET /api/files/:id/tree", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 for unknown session", async () => {
+    mockListAll.mockResolvedValue([]);
+
+    const res = await request(app).get("/api/files/nonexistent/tree");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Session not found");
+  });
+
+  it("returns 404 for non-git repo", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetGitTrackedFiles.mockResolvedValue(null);
+
+    const res = await request(app).get("/api/files/sess-001/tree");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not a git repository/i);
+  });
+
+  it("returns file list on success", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetGitTrackedFiles.mockResolvedValue([
+      "src/app.ts",
+      "src/index.ts",
+      "package.json",
+    ]);
+
+    const res = await request(app).get("/api/files/sess-001/tree");
+
+    expect(res.status).toBe(200);
+    expect(res.body.cwd).toBe("/mock/project");
+    expect(res.body.files).toHaveLength(3);
+    expect(res.body.files).toContain("src/app.ts");
+    expect(res.body.files).toContain("package.json");
+  });
+
+  it("returns 500 on unexpected error", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetGitTrackedFiles.mockRejectedValue(new Error("exec failed"));
+
+    const res = await request(app).get("/api/files/sess-001/tree");
+
+    expect(res.status).toBe(500);
+  });
+});
+
+describe("GET /api/session/:id/commands", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 when session is not connected", async () => {
+    mockIsConnected.mockReturnValue(false);
+
+    const res = await request(app).get("/api/session/sess-001/commands");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not connected/i);
+  });
+
+  it("returns 500 when sendCommand fails", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(false);
+
+    const res = await request(app).get("/api/session/sess-001/commands");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to send command/i);
+  });
+
+  it("calls sendCommand with get_commands type", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(true);
+    // Mock onEvent to immediately call back with response
+    mockOnEvent.mockImplementation((_sessionId: string, callback: (event: Record<string, unknown>) => void) => {
+      // Simulate async response
+      setTimeout(() => {
+        callback({
+          type: "response",
+          command: "get_commands",
+          success: true,
+          skills: [{ name: "commit", description: "Create a commit" }],
+          commands: [{ name: "clear", description: "Clear screen" }],
+        });
+      }, 5);
+    });
+
+    const res = await request(app).get("/api/session/sess-001/commands");
+
+    expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "get_commands" });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
   });
 });

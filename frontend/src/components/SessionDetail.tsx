@@ -26,10 +26,13 @@ import {
   type TreeBranch,
 } from "./BranchSelector.js";
 import { PromptInput } from "./PromptInput.js";
+import { MobileComposer } from "./MobileComposer.js";
 import { StreamingMessageContainer } from "./StreamingMessage.js";
 import { ModelSwitcher } from "./ModelSwitcher.js";
 import { stripAnsi } from "../utils/text.js";
 import { useAutoScroll } from "../hooks/useAutoScroll.js";
+import { usePromptState } from "../hooks/usePromptState.js";
+import type { HistoryMessage } from "./HistoryPickerSheet.js";
 
 /** Session entry types mirroring the backend API response */
 
@@ -1107,6 +1110,7 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeModel, setActiveModel] = useState<string | undefined>(undefined);
   const [hasNewMessages, setHasNewMessages] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
 
   // Use the auto-scroll hook
   const {
@@ -1117,6 +1121,29 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     enableAutoScroll,
     bottomRef,
   } = useAutoScroll({ bottomThreshold: 50 });
+
+  // Shared prompt state for PromptInput and MobileComposer
+  const promptState = usePromptState({
+    sessionId,
+    onPromptSent: scrollToBottom,
+  });
+
+  // Extract user messages for history picker
+  const historyMessages: HistoryMessage[] = useMemo(() => {
+    if (!data) return [];
+    const messages: HistoryMessage[] = [];
+    for (const entry of data.entries) {
+      if (entry.type === "message" && entry.message.role === "user") {
+        const userMsg = entry.message as UserMessage;
+        messages.push({
+          id: entry.id,
+          text: extractPlainText(userMsg.content),
+          timestamp: userMsg.timestamp,
+        });
+      }
+    }
+    return messages;
+  }, [data]);
 
   // Derive current model from last assistant message in entries
   const lastAssistantModel = useMemo(() => {
@@ -1570,12 +1597,24 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
       {isRpcConnected && (
         <div class="fixed bottom-0 left-0 right-0 z-20">
           <PromptInput
-            sessionId={sessionId}
+            promptState={promptState}
             isStreaming={isStreaming}
             onAbort={handleAbort}
-            onPromptSent={scrollToBottom}
+            onExpandComposer={() => setComposerOpen(true)}
           />
         </div>
+      )}
+
+      {/* Mobile Composer (full-screen editor) */}
+      {isRpcConnected && (
+        <MobileComposer
+          open={composerOpen}
+          onClose={() => setComposerOpen(false)}
+          sessionId={sessionId}
+          promptState={promptState}
+          historyMessages={historyMessages}
+          isStreaming={isStreaming}
+        />
       )}
 
       {/* "New messages" pill — shown when auto-scroll is paused and new content arrives */}

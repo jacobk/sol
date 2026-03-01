@@ -116,6 +116,33 @@ export async function getFileContent(cwd: string, filePath: string): Promise<str
 }
 
 /**
+ * Get all git-tracked files in the repository.
+ * Returns a flat list of file paths relative to cwd.
+ * Returns null if the directory is not a git repo.
+ */
+export async function getGitTrackedFiles(cwd: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["ls-files"], {
+      cwd,
+      maxBuffer: 5 * 1024 * 1024, // 5MB buffer for large repos
+    });
+
+    const files = stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    return files;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("not a git repository")) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
  * Get git diff for a specific file.
  * Returns raw diff text. Returns empty string if file has no diff (e.g. untracked).
  * Returns null if the directory is not a git repo.

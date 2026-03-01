@@ -18,7 +18,7 @@ vi.mock("node:util", () => ({
   promisify: () => mockExecFile,
 }));
 
-const { getGitStatus, getFileContent, getGitDiff, validateFilePath } = await import("./files.js");
+const { getGitStatus, getFileContent, getGitDiff, getGitTrackedFiles, validateFilePath } = await import("./files.js");
 
 describe("validateFilePath", () => {
   const cwd = "/projects/myapp";
@@ -228,5 +228,55 @@ describe("getGitDiff", () => {
 
     expect(result).toBeNull();
     expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("getGitTrackedFiles", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns list of tracked files", async () => {
+    mockExecFile.mockResolvedValue({
+      stdout: "src/app.ts\nsrc/index.ts\npackage.json\n",
+      stderr: "",
+    });
+
+    const result = await getGitTrackedFiles("/projects/myapp");
+
+    expect(result).toEqual(["src/app.ts", "src/index.ts", "package.json"]);
+  });
+
+  it("handles empty repository", async () => {
+    mockExecFile.mockResolvedValue({ stdout: "", stderr: "" });
+
+    const result = await getGitTrackedFiles("/projects/myapp");
+
+    expect(result).toEqual([]);
+  });
+
+  it("trims whitespace from file paths", async () => {
+    mockExecFile.mockResolvedValue({
+      stdout: "  src/app.ts  \n  README.md  \n",
+      stderr: "",
+    });
+
+    const result = await getGitTrackedFiles("/projects/myapp");
+
+    expect(result).toEqual(["src/app.ts", "README.md"]);
+  });
+
+  it("returns null for non-git directory", async () => {
+    mockExecFile.mockRejectedValue(new Error("fatal: not a git repository"));
+
+    const result = await getGitTrackedFiles("/tmp/not-a-repo");
+
+    expect(result).toBeNull();
+  });
+
+  it("rethrows unexpected errors", async () => {
+    mockExecFile.mockRejectedValue(new Error("permission denied"));
+
+    await expect(getGitTrackedFiles("/projects/myapp")).rejects.toThrow("permission denied");
   });
 });

@@ -1,39 +1,31 @@
 import type { JSX } from "preact";
 import { useState, useRef, useCallback, useEffect } from "preact/hooks";
-
-/** Delivery mode for the prompt */
-export type DeliveryMode = "prompt" | "steer" | "follow_up";
-
-type SendState = "idle" | "sending" | "error";
-
-interface PromptInputProps {
-  sessionId: string;
-  isStreaming: boolean;
-  onAbort: () => void;
-  onPromptSent?: () => void;
-  class?: string;
-}
+import { IconButton } from "./ui/index.js";
+import type { PromptState } from "../hooks/usePromptState.js";
+import { MODE_LABELS } from "../hooks/usePromptState.js";
 
 /** Max rows before the textarea scrolls internally */
 const MAX_ROWS = 6;
 
-/** Labels for each delivery mode */
-const MODE_LABELS: Record<DeliveryMode, string> = {
-  prompt: "Send",
-  steer: "Steer",
-  follow_up: "Follow Up",
-};
+interface PromptInputProps {
+  promptState: PromptState;
+  isStreaming: boolean;
+  onAbort: () => void;
+  onExpandComposer: () => void;
+  class?: string;
+}
 
+/**
+ * Compact prompt input bar at the bottom of the session view.
+ * Includes expand button to open the full MobileComposer.
+ */
 export function PromptInput({
-  sessionId,
+  promptState,
   isStreaming,
   onAbort,
-  onPromptSent,
+  onExpandComposer,
   class: className = "",
 }: PromptInputProps): JSX.Element {
-  const [text, setText] = useState("");
-  const [sendState, setSendState] = useState<SendState>("idle");
-  const [mode, setMode] = useState<DeliveryMode>("prompt");
   const [showModeMenu, setShowModeMenu] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -50,57 +42,23 @@ export function PromptInput({
 
   useEffect(() => {
     resize();
-  }, [text, resize]);
-
-  const sendPrompt = useCallback(async (deliveryMode: DeliveryMode) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-
-    setSendState("sending");
-    try {
-      const endpoint = `/api/session/${encodeURIComponent(sessionId)}/${deliveryMode}`;
-
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Unknown error" })) as { error: string };
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-
-      setText("");
-      setSendState("idle");
-      onPromptSent?.();
-      // Reset mode to prompt after sending
-      if (deliveryMode !== "prompt") {
-        setMode("prompt");
-      }
-    } catch (err) {
-      console.error("Failed to send prompt:", err);
-      setSendState("error");
-      // Clear error state after 2 seconds
-      setTimeout(() => setSendState("idle"), 2000);
-    }
-  }, [text, sessionId]);
+  }, [promptState.text, resize]);
 
   const handleSend = useCallback(() => {
-    void sendPrompt(mode);
-  }, [sendPrompt, mode]);
+    void promptState.sendPrompt();
+  }, [promptState]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       // Enter without shift sends on desktop (not primary use case but nice to have)
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (!isStreaming && text.trim()) {
+        if (!isStreaming && promptState.canSend) {
           handleSend();
         }
       }
     },
-    [handleSend, isStreaming, text]
+    [handleSend, isStreaming, promptState.canSend]
   );
 
   // Long press on send button to open mode selector
@@ -122,19 +80,20 @@ export function PromptInput({
     }
   }, [handleSend, showModeMenu]);
 
-  const handleSelectMode = useCallback((newMode: DeliveryMode) => {
-    setMode(newMode);
-    setShowModeMenu(false);
-  }, []);
-
-  const canSend = text.trim().length > 0 && sendState !== "sending";
+  const handleSelectMode = useCallback(
+    (newMode: typeof promptState.mode) => {
+      promptState.setMode(newMode);
+      setShowModeMenu(false);
+    },
+    [promptState]
+  );
 
   return (
     <div class={`bg-bg-app border-t border-border-subtle ${className}`}>
       {/* Mode menu (shown on long-press) */}
       {showModeMenu && (
         <div class="flex gap-2 px-4 pt-3 pb-1">
-          {(["prompt", "steer", "follow_up"] as DeliveryMode[]).map((m) => (
+          {(["prompt", "steer", "follow_up"] as const).map((m) => (
             <button
               key={m}
               type="button"
@@ -142,9 +101,10 @@ export function PromptInput({
               class={`
                 px-3 py-1.5 rounded-full text-sm font-medium min-h-[var(--spacing-touch)]
                 transition-colors duration-100
-                ${m === mode
-                  ? "bg-accent text-white"
-                  : "bg-surface text-text-muted active:bg-surface-2"
+                ${
+                  m === promptState.mode
+                    ? "bg-accent text-white"
+                    : "bg-surface text-text-muted active:bg-surface-2"
                 }
               `}
             >
@@ -155,7 +115,7 @@ export function PromptInput({
       )}
 
       {/* Error feedback */}
-      {sendState === "error" && (
+      {promptState.sendState === "error" && (
         <div class="px-4 pt-2">
           <span class="text-xs text-state-error">Failed to send. Try again.</span>
         </div>
@@ -163,27 +123,32 @@ export function PromptInput({
 
       {/* Input row */}
       <div class="flex items-end gap-2 px-4 py-3">
+        {/* Expand button */}
+        <IconButton label="Open full editor" onClick={onExpandComposer} class="shrink-0 mb-0.5">
+          <ExpandIcon />
+        </IconButton>
+
         {/* Mode indicator (when not default) */}
-        {mode !== "prompt" && (
+        {promptState.mode !== "prompt" && (
           <button
             type="button"
-            onClick={() => setMode("prompt")}
+            onClick={() => promptState.setMode("prompt")}
             class="shrink-0 mb-0.5 px-2 py-1 rounded text-xs font-medium bg-accent/20 text-accent min-h-[var(--spacing-touch)] flex items-center"
-            aria-label={`Mode: ${MODE_LABELS[mode]}. Tap to reset.`}
+            aria-label={`Mode: ${MODE_LABELS[promptState.mode]}. Tap to reset.`}
           >
-            {MODE_LABELS[mode]} ✕
+            {MODE_LABELS[promptState.mode]} ✕
           </button>
         )}
 
         {/* Textarea */}
         <textarea
           ref={textareaRef}
-          value={text}
+          value={promptState.text}
           placeholder={isStreaming ? "Steer the agent…" : "Send a message…"}
-          disabled={sendState === "sending"}
+          disabled={promptState.sendState === "sending"}
           rows={1}
           onInput={(e) => {
-            setText((e.target as HTMLTextAreaElement).value);
+            promptState.setText((e.target as HTMLTextAreaElement).value);
             resize();
           }}
           onKeyDown={handleKeyDown}
@@ -228,22 +193,44 @@ export function PromptInput({
                 handleSend();
               }
             }}
-            disabled={!canSend}
+            disabled={!promptState.canSend}
             class={`
               shrink-0 w-11 h-11 rounded-full flex items-center justify-center
               transition-all duration-100
-              ${canSend
-                ? "bg-accent text-white active:opacity-70"
-                : "bg-surface text-text-muted opacity-40"
+              ${
+                promptState.canSend
+                  ? "bg-accent text-white active:opacity-70"
+                  : "bg-surface text-text-muted opacity-40"
               }
-              ${sendState === "sending" ? "animate-pulse" : ""}
+              ${promptState.sendState === "sending" ? "animate-pulse" : ""}
             `}
-            aria-label={MODE_LABELS[mode]}
+            aria-label={MODE_LABELS[promptState.mode]}
           >
-            {sendState === "sending" ? "…" : "↑"}
+            {promptState.sendState === "sending" ? "…" : "↑"}
           </button>
         )}
       </div>
     </div>
+  );
+}
+
+/** Expand icon for opening full composer */
+function ExpandIcon(): JSX.Element {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <polyline points="15 3 21 3 21 9" />
+      <polyline points="9 21 3 21 3 15" />
+      <line x1="21" y1="3" x2="14" y2="10" />
+      <line x1="3" y1="21" x2="10" y2="14" />
+    </svg>
   );
 }

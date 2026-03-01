@@ -66,9 +66,11 @@ A dedicated `components/ui` directory handles these primitives, abstracting Head
 2. **Input / Textarea:** Auto-resizing, optimized for mobile keyboards (dictation).
 3. **Typography Elements:** Standardized headers, body text, and inline code formatting.
 4. **Dialog / Modal:** Full-screen or centered overlay for critical confirmations.
-5. **Bottom Sheet:** Slide-up sheet for context menus (model selection, options).
+5. **Bottom Sheet:** Slide-up sheet for context menus (model selection, options). Supports drag-to-dismiss and backdrop.
 6. **Chat Bubbles:** Distinct styling (padding, borders) for User, Assistant, and Tool messages.
 7. **Badges / Tags:** Small, pill-shaped indicators for metadata (model names).
+8. **SearchableList:** List with search input, scrollable items, and selection callback. Used by pickers (templates, files, history).
+9. **FullScreenOverlay:** Full-viewport modal with safe area insets. Used for intensive editing experiences (Mobile Composer).
 
 ## Implementation Rules
 
@@ -76,9 +78,56 @@ A dedicated `components/ui` directory handles these primitives, abstracting Head
 2. **Centralize Interactive Styling:** All hover/active/focus-visible styling belongs in the `components/ui` layer, not scattered across views.
 3. **Always Check Touch Targets:** Ensure any clickable element resolves to at least 44x44px. Use padding or specific height utilities to enforce this.
 
+## Implemented Primitives
+
+### SearchableList
+
+A searchable list component with filtering and selection, used by picker sheets.
+
+**Props:**
+- `items: SearchableListItem[]` — List items with `id`, `label`, optional `description` and `secondary`
+- `onSelect: (item) => void` — Selection callback
+- `placeholder?: string` — Search input placeholder
+- `emptyMessage?: string` — Message when no items match
+
+**Usage:**
+```tsx
+<SearchableList
+  items={[{ id: "1", label: "Option 1" }]}
+  onSelect={(item) => console.log(item.id)}
+  placeholder="Search options…"
+/>
+```
+
+### FullScreenOverlay
+
+A full-viewport modal with safe area insets, used for intensive editing experiences.
+
+**Props:**
+- `open: boolean` — Visibility state
+- `onClose: () => void` — Close callback
+- `children: ComponentChildren` — Overlay content
+
+**Usage:**
+```tsx
+<FullScreenOverlay open={isOpen} onClose={() => setIsOpen(false)}>
+  <div>Full-screen content here</div>
+</FullScreenOverlay>
+```
+
+### BottomSheet (enhanced)
+
+Slide-up sheet for context menus. Includes drag handle, backdrop, and safe area padding.
+
+**Props:**
+- `open: boolean` — Visibility state
+- `onClose: () => void` — Close callback
+- `title?: string` — Optional header title
+- `children: ComponentChildren` — Sheet content
+
 ## Current Limitations
 
-> **Note:** This section is completed during implementation.
-
-1. (To be filled during component implementation)
-2. (To be filled during component implementation)
+1. SearchableList uses simple substring matching (no fuzzy search)
+2. BottomSheet doesn't support drag-to-dismiss gesture (closes on backdrop tap or close button)
+3. FullScreenOverlay animations are CSS-based only (no gesture-driven dismissal)
+4. **Testing limitation**: Components using `@headlessui/react` (BottomSheet, FullScreenOverlay, Dialog) cannot be unit tested in jsdom due to Preact/React compatibility issues with Headless UI's internal hooks. These components should be tested via E2E tests or manual testing on device.

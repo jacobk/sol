@@ -9,6 +9,9 @@ export { Button, IconButton } from "./Button.js";
 export { Input, Textarea } from "./Input.js";
 export { Dialog } from "./Dialog.js";
 export { BottomSheet } from "./BottomSheet.js";
+export { FullScreenOverlay } from "./FullScreenOverlay.js";
+export { SearchableList } from "./SearchableList.js";
+export type { SearchableListItem } from "./SearchableList.js";
 
 // Chat
 export { ChatBubble } from "./ChatBubble.js";

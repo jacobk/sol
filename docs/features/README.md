@@ -13,3 +13,4 @@
 | Model Switching | [model-switching.md](model-switching.md) | Planned | 005 |
 | Testing Strategy | [testing-strategy.md](testing-strategy.md) | Planned | 007 |
 | UX Overhaul | [ux-overhaul.md](ux-overhaul.md) | Planned | 001, 006 |
+| Mobile Composer | [mobile-composer.md](mobile-composer.md) | Planned | 005, 006, 008 |
