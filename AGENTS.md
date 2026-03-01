@@ -1,0 +1,143 @@
+# AGENTS.md — Sol
+
+## Project Overview
+
+Sol is a mobile-first web app serving as a remote frontend to pi (pi.dev), a CLI-based AI coding agent. Developers browse historical sessions and interact with active ones from their phone over Tailscale VPN.
+
+- **Backend:** Node.js + Express v4 + TypeScript, run via `tsx` on port 8081 (bound to `0.0.0.0`).
+- **Frontend:** Preact + Tailwind CSS v4 + Headless UI + Vite (SPA).
+- **Historical mode:** Read-only session discovery via `@mariozechner/pi-coding-agent` SDK (`SessionManager`).
+- **Active mode:** Spawns `pi --mode rpc` subprocesses, communicates via stdin/stdout JSON, streams to client via SSE.
+
+## Build / Lint / Test Commands
+
+```bash
+npm run dev        # Backend dev server with watch (tsx watch src/server.ts)
+npm run build      # Type-check only (tsc --noEmit) — run before every commit
+npm run lint       # Same as build (tsc --noEmit)
+npm start          # Production server (tsx src/server.ts)
+```
+
+**No test framework is configured.** There are no test files, no test runner, and no test scripts. Verification is manual (type-check + curl). There is no way to run a single test. Always run `npm run build` before committing to catch type errors.
+
+## Project Structure
+
+```
+src/
+  server.ts              # Express server entry point (runs via tsx, no JS compilation)
+docs/
+  ADR/                   # Architecture Decision Records — read before architectural changes
+  PRD/                   # Product Requirements Documents
+  features/              # Feature docs with README.md index
+  tickets/               # Implementation tickets
+  constitution.md        # 9 binding global rules — MUST be followed
+.pi/
+  skills/                # Agent skills (commit-manager, prd-adr-manager)
+  prompts/               # Agent prompts (create/update/review feature)
+```
+
+## TypeScript Configuration
+
+- **Strict mode** enabled — all strict checks active.
+- `target: ES2022`, `module: ESNext`, `moduleResolution: bundler`.
+- `isolatedModules: true` — compatible with tsx and esbuild.
+- Backend runs directly via `tsx` (no tsc compilation to JS).
+- Frontend builds via Vite.
+- ESM only (`"type": "module"` in package.json).
+
+## Code Style Guidelines
+
+### Imports
+
+- ESM `import`/`export` exclusively. Never use `require()`.
+- Use `node:` prefix for Node.js built-ins: `import path from "node:path"`.
+- Local imports must include the `.js` extension (ESM resolution with tsx).
+
+### Types
+
+- Strict TypeScript — no `any` without justification.
+- Prefer explicit return types on exported functions.
+- Never use `@ts-ignore` or `@ts-nocheck` — fix the type error instead.
+
+### Naming Conventions
+
+- **Files:** `kebab-case.ts` for modules, `PascalCase.tsx` for Preact components.
+- **Variables/functions:** `camelCase`.
+- **Types/interfaces:** `PascalCase`.
+- **Constants:** `UPPER_SNAKE_CASE` for true constants, `camelCase` for derived values.
+
+### Error Handling
+
+- Return appropriate HTTP status codes (404 for not found, 500 for internal errors).
+- Never let unhandled exceptions crash Express — wrap all route handlers.
+- RPC subprocess crashes must be caught and communicated via SSE or HTTP response.
+- Never leave orphaned `pi` processes — kill RPC subprocesses on session close or server exit.
+
+### Formatting
+
+- No automated formatter (no ESLint, Prettier, or Biome). Keep consistent style with surrounding code.
+- Use double quotes for strings.
+- Indent with 2 spaces.
+
+## Commit Conventions
+
+Conventional Commits format required:
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+Refs: TICKET-001, ADR-001
+```
+
+- **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`
+- Every commit MUST reference at least one Ticket, ADR, or PRD in the footer.
+
+## Frontend Rules
+
+- **Mobile-first:** Core interactions in thumb zone, bottom sheets for menus.
+- **Dark theme:** True OLED black (`bg-black` / `bg-gray-950`).
+- **Semantic tokens:** Use Tailwind v4 CSS variables (`--color-surface`, `--color-background`, `--color-primary`). Never hardcode hex values in feature views.
+- **Touch targets:** All interactive elements minimum 44x44pt.
+- **UI primitives:** Use `components/ui` layer (wrapping Headless UI). Do not scatter complex state/accessibility logic in views.
+- **Tailwind v4:** CSS-variable architecture via `@theme` directives. No `tailwind.config.js`.
+
+## Key Dependencies
+
+- **`@mariozechner/pi-coding-agent`** — SDK for session discovery. Key APIs: `SessionManager.listAll()`, `SessionManager.open(path)`, `sm.getTree()`.
+- **`pi --mode rpc`** — Binary contract for active sessions. One subprocess per session (~50-100MB each).
+- **Express v4** (not v5) — callback-style route handlers.
+
+## API Endpoints
+
+REST and SSE endpoints on Express. Active session endpoints proxy to RPC subprocesses.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/sessions` | GET | Session list grouped by project |
+| `/api/session/:id` | GET | Full entries for one historical session |
+| `/api/session/:id/connect` | POST | Spawn RPC subprocess for session |
+| `/api/session/:id/stream` | GET (SSE) | Stream agent events |
+| `/api/session/:id/prompt` | POST | Send prompt/steer/follow_up |
+| `/api/session/:id/abort` | POST | Abort current operation |
+| `/api/session/:id/model` | PUT | Switch model |
+| `/api/tree/:id` | GET | Tree structure with children |
+| `/api/files/:id` | GET | Git working tree changes |
+| `/api/files/:id/content` | GET | Full file contents |
+
+See `docs/PRD/001-sol.md` for complete endpoint specifications.
+
+## Critical Rules (Constitution)
+
+These rules are **binding** and must never be broken:
+
+1. **Never write to session files directly.** Historical data is read-only via SDK. Active writes go through `pi --mode rpc`.
+2. **No authentication.** Tailscale provides network-level security. Do not add auth systems.
+3. **No orphaned processes.** Clean up all RPC subprocesses on session close or server exit.
+4. **Follow the constitution.** All implementations must comply with `docs/constitution.md`.
+5. **Documentation before implementation.** Technical decisions need an ADR. New features need: PRD update, feature doc, feature index update, ticket. Use `.pi/skills/prd-adr-manager/SKILL.md` workflow.
+6. **No unwarranted side effects.** Implement only what the ticket specifies — no unrelated refactors.
+7. **Review gates.** Features must pass review against ticket, PRDs, ADRs, this file, and the constitution.
+8. **Strict typing and ESM.** No `require()`, no `any` without justification, local imports use `.js` extension.
+9. **Immutable historical sessions.** Never modify session files directly — use SDK for reads, RPC for writes.
