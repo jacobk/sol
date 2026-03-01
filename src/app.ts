@@ -1,7 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listGroupedSessions, getSessionById, getSessionTree, getSessionBranch } from "./sessions.js";
+import { listGroupedSessions, getSessionById, getSessionTree, getSessionBranch, searchSessions, searchSessionEntries } from "./sessions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +22,34 @@ app.get("/api/sessions", async (_req, res) => {
   } catch (err) {
     console.error("Failed to list sessions:", err);
     res.status(500).json({ error: "Failed to list sessions" });
+  }
+});
+
+// Search across all sessions
+app.get("/api/sessions/search", async (req, res) => {
+  try {
+    const query = typeof req.query.q === "string" ? req.query.q : "";
+    const results = await searchSessions(query);
+    res.json(results);
+  } catch (err) {
+    console.error("Failed to search sessions:", err);
+    res.status(500).json({ error: "Failed to search sessions" });
+  }
+});
+
+// Search within a specific session
+app.get("/api/session/:id/search", async (req, res) => {
+  try {
+    const query = typeof req.query.q === "string" ? req.query.q : "";
+    const result = await searchSessionEntries(req.params.id, query);
+    if (result === null) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    console.error("Failed to search session entries:", err);
+    res.status(500).json({ error: "Failed to search session entries" });
   }
 });
 

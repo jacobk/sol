@@ -192,6 +192,7 @@ type LoadState = "idle" | "loading" | "error";
 interface SessionDetailProps {
   sessionId: string;
   onBack: () => void;
+  searchQuery?: string;
 }
 
 /** Max characters before a message is considered "long" and collapsed by default */
@@ -333,8 +334,40 @@ function CopyButton({ text }: { text: string }): JSX.Element {
   );
 }
 
+/** Highlights all occurrences of `query` in `text` (case-insensitive) */
+function HighlightText({ text, query }: { text: string; query?: string }): JSX.Element {
+  if (!query || !query.trim()) {
+    return <>{text}</>;
+  }
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const parts: JSX.Element[] = [];
+  let lastIndex = 0;
+  let idx = lowerText.indexOf(lowerQuery);
+  let key = 0;
+
+  while (idx !== -1) {
+    if (idx > lastIndex) {
+      parts.push(<span key={key++}>{text.slice(lastIndex, idx)}</span>);
+    }
+    parts.push(
+      <mark key={key++} class="bg-accent/30 text-text-primary rounded-sm px-0.5">
+        {text.slice(idx, idx + query.length)}
+      </mark>
+    );
+    lastIndex = idx + query.length;
+    idx = lowerText.indexOf(lowerQuery, lastIndex);
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(<span key={key++}>{text.slice(lastIndex)}</span>);
+  }
+
+  return <>{parts}</>;
+}
+
 /** Renders content blocks from extractAllContent */
-function ContentBlocks({ blocks }: { blocks: ExtractedContent[] }): JSX.Element {
+function ContentBlocks({ blocks, searchQuery }: { blocks: ExtractedContent[]; searchQuery?: string }): JSX.Element {
   return (
     <>
       {blocks.map((block, i) => {
@@ -342,7 +375,7 @@ function ContentBlocks({ blocks }: { blocks: ExtractedContent[] }): JSX.Element 
           case "text":
             return (
               <div key={i} class="whitespace-pre-wrap break-words">
-                {block.text}
+                <HighlightText text={block.text} query={searchQuery} />
               </div>
             );
           case "thinking":
@@ -352,7 +385,7 @@ function ContentBlocks({ blocks }: { blocks: ExtractedContent[] }): JSX.Element 
                   💭 Thinking{block.redacted ? " (redacted)" : ""}
                 </summary>
                 <div class="mt-1 pl-3 border-l-2 border-border-subtle text-sm text-text-muted whitespace-pre-wrap break-words">
-                  {block.text}
+                  <HighlightText text={block.text} query={searchQuery} />
                 </div>
               </details>
             );
@@ -457,7 +490,7 @@ function CollapsibleEntry({
   );
 }
 
-function renderMessageEntry(entry: SessionMessageEntry): JSX.Element | null {
+function renderMessageEntry(entry: SessionMessageEntry, searchQuery?: string): JSX.Element | null {
   const msg = entry.message;
 
   switch (msg.role) {
@@ -465,7 +498,7 @@ function renderMessageEntry(entry: SessionMessageEntry): JSX.Element | null {
       const blocks = extractAllContent(msg.content as string | ContentBlock[]);
       return (
         <ChatBubble role="user">
-          <ContentBlocks blocks={blocks} />
+          <ContentBlocks blocks={blocks} searchQuery={searchQuery} />
         </ChatBubble>
       );
     }
@@ -474,7 +507,7 @@ function renderMessageEntry(entry: SessionMessageEntry): JSX.Element | null {
       const blocks = extractAllContent(msg.content);
       return (
         <ChatBubble role="assistant">
-          <ContentBlocks blocks={blocks} />
+          <ContentBlocks blocks={blocks} searchQuery={searchQuery} />
           <AssistantMeta message={msg} />
         </ChatBubble>
       );
@@ -487,7 +520,7 @@ function renderMessageEntry(entry: SessionMessageEntry): JSX.Element | null {
           {msg.isError && (
             <Badge variant="error" class="mb-2">Error</Badge>
           )}
-          <ContentBlocks blocks={blocks} />
+          <ContentBlocks blocks={blocks} searchQuery={searchQuery} />
         </ChatBubble>
       );
     }
@@ -518,7 +551,7 @@ function renderMessageEntry(entry: SessionMessageEntry): JSX.Element | null {
             {formatTokens(msg.tokensBefore)} tokens compacted
           </Metadata>
           <div class="whitespace-pre-wrap break-words text-sm text-text-muted">
-            {msg.summary}
+            <HighlightText text={msg.summary} query={searchQuery} />
           </div>
         </ChatBubble>
       );
@@ -528,7 +561,7 @@ function renderMessageEntry(entry: SessionMessageEntry): JSX.Element | null {
       return (
         <ChatBubble role="system" label="Branch">
           <div class="whitespace-pre-wrap break-words text-sm text-text-muted">
-            {msg.summary}
+            <HighlightText text={msg.summary} query={searchQuery} />
           </div>
         </ChatBubble>
       );
@@ -539,7 +572,7 @@ function renderMessageEntry(entry: SessionMessageEntry): JSX.Element | null {
       const blocks = extractAllContent(msg.content as string | ContentBlock[]);
       return (
         <ChatBubble role="system" label={msg.customType}>
-          <ContentBlocks blocks={blocks} />
+          <ContentBlocks blocks={blocks} searchQuery={searchQuery} />
         </ChatBubble>
       );
     }
@@ -549,10 +582,10 @@ function renderMessageEntry(entry: SessionMessageEntry): JSX.Element | null {
   }
 }
 
-function renderEntry(entry: SessionEntry): JSX.Element | null {
+function renderEntry(entry: SessionEntry, searchQuery?: string): JSX.Element | null {
   switch (entry.type) {
     case "message":
-      return renderMessageEntry(entry);
+      return renderMessageEntry(entry, searchQuery);
 
     case "compaction":
       return (
@@ -561,7 +594,7 @@ function renderEntry(entry: SessionEntry): JSX.Element | null {
             {formatTokens(entry.tokensBefore)} tokens compacted
           </Metadata>
           <div class="whitespace-pre-wrap break-words text-sm text-text-muted">
-            {entry.summary}
+            <HighlightText text={entry.summary} query={searchQuery} />
           </div>
         </ChatBubble>
       );
@@ -570,7 +603,7 @@ function renderEntry(entry: SessionEntry): JSX.Element | null {
       return (
         <ChatBubble role="system" label="Branch">
           <div class="whitespace-pre-wrap break-words text-sm text-text-muted">
-            {entry.summary}
+            <HighlightText text={entry.summary} query={searchQuery} />
           </div>
         </ChatBubble>
       );
@@ -579,7 +612,7 @@ function renderEntry(entry: SessionEntry): JSX.Element | null {
       if (!entry.display) return null;
       return (
         <ChatBubble role="system" label={entry.customType}>
-          <ContentBlocks blocks={extractAllContent(entry.content as string | ContentBlock[])} />
+          <ContentBlocks blocks={extractAllContent(entry.content as string | ContentBlock[])} searchQuery={searchQuery} />
         </ChatBubble>
       );
 
@@ -711,7 +744,7 @@ function collectAllBranches(nodes: TreeNode[]): TreeBranch[] {
   return branches;
 }
 
-export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.Element {
+export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailProps): JSX.Element {
   const [data, setData] = useState<SessionDetailData | null>(null);
   const [treeData, setTreeData] = useState<TreeData | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
@@ -778,10 +811,17 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
       }
 
       // Initialize collapsed state for all entries
+      // When navigating from search, expand entries that contain matches
       const initialCollapsed: Record<string, boolean> = {};
+      const lowerQuery = searchQuery ? searchQuery.toLowerCase() : "";
       for (const entry of result.entries) {
         if (isRenderable(entry)) {
-          initialCollapsed[entry.id] = shouldCollapseByDefault(entry);
+          if (lowerQuery && getCopyText(entry).toLowerCase().includes(lowerQuery)) {
+            // Expand entries with search matches
+            initialCollapsed[entry.id] = false;
+          } else {
+            initialCollapsed[entry.id] = shouldCollapseByDefault(entry);
+          }
         }
       }
       setCollapsedMap(initialCollapsed);
@@ -790,7 +830,7 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
       setErrorMessage(err instanceof Error ? err.message : "Unknown error");
       setLoadState("error");
     }
-  }, [sessionId]);
+  }, [sessionId, searchQuery]);
 
   const fetchTree = useCallback(async () => {
     try {
@@ -821,6 +861,19 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
+
+  // Scroll to first search match after data loads
+  useEffect(() => {
+    if (!searchQuery || !data || loadState !== "idle") return;
+    // Small delay to allow rendering
+    const timer = setTimeout(() => {
+      const mark = document.querySelector("mark");
+      if (mark) {
+        mark.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [searchQuery, data, loadState]);
 
   const toggleEntry = useCallback((id: string) => {
     setCollapsedMap((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -949,7 +1002,7 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
           <Stack direction="vertical" gap={3}>
             {data.entries.map((entry) => {
               if (!isRenderable(entry)) return null;
-              const rendered = renderEntry(entry);
+              const rendered = renderEntry(entry, searchQuery);
               if (!rendered) return null;
               const branchCount = childCountMap.get(entry.id) ?? 0;
               return (

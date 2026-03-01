@@ -6,6 +6,8 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { extractPlainText, truncatePreview } from "./content.js";
 
+export type { SessionEntry };
+
 export interface SessionResponse {
   path: string;
   id: string;
@@ -240,4 +242,152 @@ export async function getSessionBranch(
   const entries = sm.getBranch(leafId);
 
   return { header, entries };
+}
+
+// --- Search ---
+
+export interface SessionSearchResult {
+  path: string;
+  id: string;
+  cwd: string;
+  name?: string;
+  created: string;
+  modified: string;
+  messageCount: number;
+  firstMessage: string;
+  hitCount: number;
+}
+
+/**
+ * Search across all sessions. Filters sessions where `allMessagesText`
+ * contains the query (case-insensitive). Returns matching sessions with hit count.
+ * Empty query returns all sessions (no hit count).
+ */
+export async function searchSessions(
+  query: string
+): Promise<SessionSearchResult[]> {
+  const allSessions = await SessionManager.listAll();
+
+  // Sort by modified descending (consistent with listGroupedSessions)
+  allSessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+
+  if (!query.trim()) {
+    return allSessions.map((info) => ({
+      ...toSessionResponse(info),
+      hitCount: 0,
+    }));
+  }
+
+  const lowerQuery = query.toLowerCase();
+  const results: SessionSearchResult[] = [];
+
+  for (const info of allSessions) {
+    const text = info.allMessagesText.toLowerCase();
+    let hitCount = 0;
+    let idx = 0;
+    while ((idx = text.indexOf(lowerQuery, idx)) !== -1) {
+      hitCount++;
+      idx += lowerQuery.length;
+    }
+
+    if (hitCount > 0) {
+      results.push({
+        ...toSessionResponse(info),
+        hitCount,
+      });
+    }
+  }
+
+  return results;
+}
+
+export interface EntrySearchMatch {
+  entryId: string;
+  snippet: string;
+}
+
+/**
+ * Search within a specific session. Scans all entries for matches,
+ * returning matching entry IDs with surrounding context snippets.
+ * Returns null if session not found.
+ */
+export async function searchSessionEntries(
+  id: string,
+  query: string
+): Promise<EntrySearchMatch[] | null> {
+  const allSessions = await SessionManager.listAll();
+  const match = allSessions.find((s) => s.id === id);
+
+  if (!match) {
+    return null;
+  }
+
+  if (!query.trim()) {
+    return [];
+  }
+
+  const sm = SessionManager.open(match.path);
+  const entries = sm.getEntries();
+  const lowerQuery = query.toLowerCase();
+  const matches: EntrySearchMatch[] = [];
+
+  for (const entry of entries) {
+    const text = extractEntryText(entry);
+    const lowerText = text.toLowerCase();
+    const idx = lowerText.indexOf(lowerQuery);
+
+    if (idx !== -1) {
+      // Extract snippet with surrounding context (~40 chars each side)
+      const snippetStart = Math.max(0, idx - 40);
+      const snippetEnd = Math.min(text.length, idx + query.length + 40);
+      let snippet = text.slice(snippetStart, snippetEnd).replace(/\n/g, " ");
+      if (snippetStart > 0) snippet = "…" + snippet;
+      if (snippetEnd < text.length) snippet = snippet + "…";
+
+      matches.push({
+        entryId: entry.id,
+        snippet,
+      });
+    }
+  }
+
+  return matches;
+}
+
+/**
+ * Extract searchable plain text from a session entry.
+ */
+function extractEntryText(entry: SessionEntry): string {
+  switch (entry.type) {
+    case "message": {
+      const msg = entry.message as unknown as Record<string, unknown>;
+      const role = (msg.role as string) ?? "";
+      if (role === "user" || role === "assistant" || role === "custom") {
+        return extractPlainText(msg.content as unknown[] | string);
+      }
+      if (role === "toolResult") {
+        return extractPlainText(msg.content as unknown[] | string);
+      }
+      if (role === "bashExecution") {
+        return `${msg.command as string}\n${msg.output as string}`;
+      }
+      if (role === "compactionSummary") {
+        return (msg.summary as string) ?? "";
+      }
+      if (role === "branchSummary") {
+        return (msg.summary as string) ?? "";
+      }
+      return "";
+    }
+    case "compaction":
+      return entry.summary;
+    case "branch_summary":
+      return entry.summary;
+    case "custom_message":
+      return extractPlainText(
+        entry.content as unknown[] | string | undefined
+      );
+    default:
+      return "";
+  }
 }

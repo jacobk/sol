@@ -18,16 +18,28 @@ From [PRD 001](../PRD/001-sol.md) Section 2.4:
 
 | File | Purpose |
 |------|---------|
-| `src/server.ts` | `/api/sessions/search` and `/api/session/:id/search` endpoints |
-| `public/index.html` | Search bar and results rendering |
+| `src/sessions.ts` | `searchSessions()` and `searchSessionEntries()` functions |
+| `src/app.ts` | `/api/sessions/search` and `/api/session/:id/search` routes |
+| `frontend/src/components/Search.tsx` | Search bar with debounced as-you-type results |
+| `frontend/src/components/SessionCard.tsx` | Extracted shared session card component |
+| `frontend/src/components/SessionDetail.tsx` | Match highlighting via `HighlightText` and scroll-to-first-match |
+| `frontend/src/App.tsx` | View routing for search screen |
 
 ### Data Flow
 
-{To be filled during implementation.}
+1. User types in search bar → 300ms debounce → `GET /api/sessions/search?q=term`
+2. Backend calls `SessionManager.listAll()`, filters by `allMessagesText` (case-insensitive substring), counts hits
+3. Results rendered as `SessionCard` components with hit count badge
+4. Tapping result navigates to `SessionDetail` with `searchQuery` prop
+5. `SessionDetail` expands entries containing matches, highlights text via `<mark>` elements, scrolls to first match
 
 ### Key Functions
 
-{To be filled during implementation.}
+| Function | File | Purpose |
+|----------|------|---------|
+| `searchSessions(query)` | `src/sessions.ts` | Filter sessions by `allMessagesText`, return with hit counts |
+| `searchSessionEntries(id, query)` | `src/sessions.ts` | Scan entries in a session, return matching entry IDs with context snippets |
+| `HighlightText` | `frontend/src/components/SessionDetail.tsx` | Wraps text with `<mark>` elements for search query matches |
 
 ## Rationale
 

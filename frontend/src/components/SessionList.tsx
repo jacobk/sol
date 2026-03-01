@@ -1,18 +1,7 @@
 import type { JSX } from "preact";
 import { useState, useEffect, useCallback } from "preact/hooks";
-import { Badge, Body, Button, Container, Metadata, Stack, Title } from "./ui/index.js";
-import { formatRelativeTime, truncate } from "../utils/format.js";
-
-interface SessionResponse {
-  path: string;
-  id: string;
-  cwd: string;
-  name?: string;
-  created: string;
-  modified: string;
-  messageCount: number;
-  firstMessage: string;
-}
+import { Body, Button, Container, Metadata, Stack, Title } from "./ui/index.js";
+import { SessionCard, type SessionResponse } from "./SessionCard.js";
 
 interface GroupedSessions {
   project: string;
@@ -29,26 +18,7 @@ function projectDisplayName(project: string): string {
 
 interface SessionListProps {
   onSelectSession: (id: string) => void;
-}
-
-function SessionCard({ session, onSelect }: { session: SessionResponse; onSelect: () => void }): JSX.Element {
-  const displayName = session.name || truncate(session.firstMessage, 80) || "Empty session";
-
-  return (
-    <button
-      type="button"
-      class="w-full text-left bg-surface rounded-lg p-4 active:bg-surface-2 transition-colors duration-100 min-h-[var(--spacing-touch)]"
-      onClick={onSelect}
-    >
-      <Stack direction="vertical" gap={2}>
-        <Body class="line-clamp-2">{displayName}</Body>
-        <Stack direction="horizontal" gap={3} class="items-center">
-          <Badge>{session.messageCount} msgs</Badge>
-          <Metadata>{formatRelativeTime(session.modified)}</Metadata>
-        </Stack>
-      </Stack>
-    </button>
-  );
+  onOpenSearch: () => void;
 }
 
 function EmptyState(): JSX.Element {
@@ -63,7 +33,7 @@ function EmptyState(): JSX.Element {
   );
 }
 
-export function SessionList({ onSelectSession }: SessionListProps): JSX.Element {
+export function SessionList({ onSelectSession, onOpenSearch }: SessionListProps): JSX.Element {
   const [groups, setGroups] = useState<GroupedSessions[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -95,14 +65,23 @@ export function SessionList({ onSelectSession }: SessionListProps): JSX.Element 
       <div class="sticky top-0 z-10 bg-bg-app border-b border-border-subtle">
         <Container class="py-3 flex items-center justify-between">
           <Title>Sessions</Title>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void fetchSessions()}
-            loading={loadState === "loading"}
-          >
-            Refresh
-          </Button>
+          <div class="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onOpenSearch}
+            >
+              🔍 Search
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void fetchSessions()}
+              loading={loadState === "loading"}
+            >
+              Refresh
+            </Button>
+          </div>
         </Container>
       </div>
 

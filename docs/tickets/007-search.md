@@ -2,7 +2,7 @@
 
 **Related:** ADR 002, PRD 001 Section 3.8
 **Feature:** [Search](../features/search.md)
-**Status:** Ready for Implementation (depends on TICKET-004, TICKET-005)
+**Status:** Failed Review
 **Created:** 2026-03-01
 
 ## Context to Load
@@ -55,6 +55,15 @@ curl 'http://localhost:8081/api/sessions/search?q=test' | jq '. | length'
 - [ ] Search UI provides results as you type with debounce
 - [ ] Tapping a search result navigates to the session detail
 - [ ] Response time <500ms for typical session count
+- [ ] Backend routes and extractable logic are covered by unit and integration tests
+
+## Feedback
+**Status**: Failed Review
+**Reason**: Missing unit and integration tests for the search feature. PRD Section 3.9 dictates "Every implementation ticket requires tests that verify its acceptance criteria", "Unit tests for all backend modules containing extractable logic", and "API integration tests for every Express endpoint using supertest".
+
+Tests need to be added for:
+1. `src/sessions.test.ts` to test `searchSessions` and `searchSessionEntries` functions.
+2. `src/app.test.ts` to test `/api/sessions/search` and `/api/session/:id/search` endpoints using `supertest`.
 
 ## Files to Modify
 
