@@ -26,6 +26,7 @@ import {
 } from "./BranchSelector.js";
 import { PromptInput } from "./PromptInput.js";
 import { StreamingMessageContainer } from "./StreamingMessage.js";
+import { ModelSwitcher } from "./ModelSwitcher.js";
 
 /** Session entry types mirroring the backend API response */
 
@@ -764,6 +765,22 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [activeModel, setActiveModel] = useState<string | undefined>(undefined);
+
+  // Derive current model from last assistant message in entries
+  const lastAssistantModel = useMemo(() => {
+    if (!data) return undefined;
+    for (let i = data.entries.length - 1; i >= 0; i--) {
+      const entry = data.entries[i];
+      if (entry.type === "message" && entry.message.role === "assistant") {
+        return entry.message.model;
+      }
+    }
+    return undefined;
+  }, [data]);
+
+  // Use activeModel (from model switching) if set, otherwise fall back to last assistant message
+  const currentModel = activeModel ?? lastAssistantModel;
 
   // Compute child count map and children map from tree data
   const childCountMap = useMemo(
@@ -1081,6 +1098,12 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
               {isRpcConnected && (
                 <Badge variant="accent">Live</Badge>
               )}
+              <ModelSwitcher
+                sessionId={sessionId}
+                isRpcConnected={isRpcConnected}
+                currentModel={currentModel}
+                onModelChange={setActiveModel}
+              />
               {onOpenFiles && (
                 <Button
                   variant="ghost"

@@ -283,7 +283,7 @@ app.get("/api/session/:id/state", (req, res) => {
 
   const listener: RpcEventCallback = (event) => {
     // Look for state response event
-    if (event.type === "state" || event.type === "get_state_response") {
+    if (event.type === "response" && event.command === "get_state") {
       clearTimeout(timeout);
       offEvent(sessionId, listener);
       res.json(event);
@@ -300,6 +300,96 @@ app.get("/api/session/:id/state", (req, res) => {
 
   onEvent(sessionId, listener);
   const sent = sendCommand(sessionId, { type: "get_state" });
+  if (!sent) {
+    clearTimeout(timeout);
+    offEvent(sessionId, listener);
+    res.status(500).json({ error: "Failed to send command to RPC subprocess" });
+  }
+});
+
+// Get available models via RPC
+app.get("/api/session/:id/models", (req, res) => {
+  const sessionId = req.params.id;
+
+  if (!isConnected(sessionId)) {
+    res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
+    return;
+  }
+
+  const timeout = setTimeout(() => {
+    offEvent(sessionId, listener);
+    res.status(504).json({ error: "Timeout waiting for models response" });
+  }, 10_000);
+
+  const listener: RpcEventCallback = (event) => {
+    if (event.type === "response" && event.command === "get_available_models") {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      if (event.success === false) {
+        res.status(500).json({ error: "RPC command failed", details: event.error });
+        return;
+      }
+      res.json(event);
+      return;
+    }
+    if (event.type === "rpc_exit" || event.type === "rpc_error") {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      res.status(500).json({ error: "RPC subprocess terminated", details: event });
+      return;
+    }
+  };
+
+  onEvent(sessionId, listener);
+  const sent = sendCommand(sessionId, { type: "get_available_models" });
+  if (!sent) {
+    clearTimeout(timeout);
+    offEvent(sessionId, listener);
+    res.status(500).json({ error: "Failed to send command to RPC subprocess" });
+  }
+});
+
+// Switch model via RPC
+app.put("/api/session/:id/model", (req, res) => {
+  const sessionId = req.params.id;
+
+  if (!isConnected(sessionId)) {
+    res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
+    return;
+  }
+
+  const { provider, modelId } = req.body as { provider?: string; modelId?: string };
+  if (!provider || typeof provider !== "string" || !modelId || typeof modelId !== "string") {
+    res.status(400).json({ error: "Missing required fields: provider, modelId" });
+    return;
+  }
+
+  const timeout = setTimeout(() => {
+    offEvent(sessionId, listener);
+    res.status(504).json({ error: "Timeout waiting for model switch response" });
+  }, 10_000);
+
+  const listener: RpcEventCallback = (event) => {
+    if (event.type === "response" && event.command === "set_model") {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      if (event.success === false) {
+        res.status(500).json({ error: "RPC command failed", details: event.error });
+        return;
+      }
+      res.json(event);
+      return;
+    }
+    if (event.type === "rpc_exit" || event.type === "rpc_error") {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      res.status(500).json({ error: "RPC subprocess terminated", details: event });
+      return;
+    }
+  };
+
+  onEvent(sessionId, listener);
+  const sent = sendCommand(sessionId, { type: "set_model", provider, modelId });
   if (!sent) {
     clearTimeout(timeout);
     offEvent(sessionId, listener);

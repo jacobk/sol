@@ -2,7 +2,7 @@
 
 **Related:** ADR 005, PRD 001 Section 3.6
 **Feature:** [Model Switching](../features/model-switching.md)
-**Status:** Ready for Implementation (depends on TICKET-003, TICKET-008, TICKET-009)
+**Status:** Complete
 **Created:** 2026-03-01
 
 ## Context to Load

@@ -320,14 +320,142 @@ describe("GET /api/session/:id/state", () => {
     mockIsConnected.mockReturnValue(true);
     mockSendCommand.mockReturnValue(true);
     mockOnEvent.mockImplementation((_sessionId: string, callback: (event: Record<string, unknown>) => void) => {
-      setTimeout(() => callback({ type: "state", model: "claude-3.5-sonnet", streaming: false }), 10);
+      setTimeout(() => callback({ type: "response", command: "get_state", success: true, data: { model: { provider: "anthropic", modelId: "claude-3.5-sonnet" }, isStreaming: false } }), 10);
     });
 
     const res = await request(app).get("/api/session/sess-001/state");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ type: "state", model: "claude-3.5-sonnet", streaming: false });
+    expect(res.body).toEqual({ type: "response", command: "get_state", success: true, data: { model: { provider: "anthropic", modelId: "claude-3.5-sonnet" }, isStreaming: false } });
     expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "get_state" });
+  });
+});
+
+// --- Model Endpoint Tests ---
+
+describe("GET /api/session/:id/models", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 if session is not connected", async () => {
+    mockIsConnected.mockReturnValue(false);
+
+    const res = await request(app).get("/api/session/sess-001/models");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not connected/i);
+  });
+
+  it("returns 500 if sendCommand fails", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(false);
+
+    const res = await request(app).get("/api/session/sess-001/models");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to send/);
+  });
+
+  it("sends get_available_models command and returns the response", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(true);
+    mockOnEvent.mockImplementation((_sessionId: string, callback: (event: Record<string, unknown>) => void) => {
+      setTimeout(() => callback({
+        type: "response",
+        command: "get_available_models",
+        success: true,
+        data: {
+          models: [
+            { provider: "anthropic", modelId: "claude-3.5-sonnet" },
+            { provider: "anthropic", modelId: "claude-3-opus" },
+            { provider: "openai", modelId: "gpt-4o" },
+          ],
+        },
+      }), 10);
+    });
+
+    const res = await request(app).get("/api/session/sess-001/models");
+
+    expect(res.status).toBe(200);
+    expect(res.body.type).toBe("response");
+    expect(res.body.command).toBe("get_available_models");
+    expect(res.body.data.models).toHaveLength(3);
+    expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "get_available_models" });
+  });
+});
+
+describe("PUT /api/session/:id/model", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 if session is not connected", async () => {
+    mockIsConnected.mockReturnValue(false);
+
+    const res = await request(app)
+      .put("/api/session/sess-001/model")
+      .send({ provider: "anthropic", modelId: "claude-3-opus" });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not connected/i);
+  });
+
+  it("returns 400 when provider or modelId is missing", async () => {
+    mockIsConnected.mockReturnValue(true);
+
+    const res = await request(app)
+      .put("/api/session/sess-001/model")
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/provider/i);
+  });
+
+  it("returns 400 when only provider is given", async () => {
+    mockIsConnected.mockReturnValue(true);
+
+    const res = await request(app)
+      .put("/api/session/sess-001/model")
+      .send({ provider: "anthropic" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/modelId/i);
+  });
+
+  it("returns 500 if sendCommand fails", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(false);
+
+    const res = await request(app)
+      .put("/api/session/sess-001/model")
+      .send({ provider: "anthropic", modelId: "claude-3-opus" });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to send/);
+  });
+
+  it("sends set_model command and returns the response", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(true);
+    mockOnEvent.mockImplementation((_sessionId: string, callback: (event: Record<string, unknown>) => void) => {
+      setTimeout(() => callback({
+        type: "response",
+        command: "set_model",
+        success: true,
+        data: { provider: "anthropic", modelId: "claude-3-opus" },
+      }), 10);
+    });
+
+    const res = await request(app)
+      .put("/api/session/sess-001/model")
+      .send({ provider: "anthropic", modelId: "claude-3-opus" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.type).toBe("response");
+    expect(res.body.command).toBe("set_model");
+    expect(res.body.data).toEqual({ provider: "anthropic", modelId: "claude-3-opus" });
+    expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "set_model", provider: "anthropic", modelId: "claude-3-opus" });
   });
 });
 

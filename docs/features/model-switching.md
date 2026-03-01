@@ -11,22 +11,24 @@ From [PRD 001](../PRD/001-sol.md) Section 2.5:
 
 ## Implementation
 
-> **Note:** This section is completed by the implementation agent.
-
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/server.ts` | `/api/session/:id/models` (GET) and `/api/session/:id/model` (PUT) endpoints |
-| `frontend/src/components/ModelSwitcher.tsx` | Model selection UI (bottom sheet) |
+| `src/app.ts` | `GET /api/session/:id/models` and `PUT /api/session/:id/model` endpoints |
+| `frontend/src/components/ModelSwitcher.tsx` | Model selection UI (badge trigger + bottom sheet) |
+| `frontend/src/components/SessionDetail.tsx` | Integrates ModelSwitcher into the session header |
 
 ### Data Flow
 
-{To be filled during implementation.}
+1. **List models:** Frontend calls `GET /api/session/:id/models` → Express sends `{ type: "get_available_models" }` to pi RPC stdin → pi responds with `available_models` event on stdout → Express returns JSON to frontend.
+2. **Switch model:** Frontend calls `PUT /api/session/:id/model` with `{ model: "<name>" }` → Express sends `{ type: "set_model", model: "<name>" }` to pi RPC stdin → pi responds with `model_set` event on stdout → Express returns JSON to frontend → `ModelSwitcher` calls `onModelChange` to update the displayed model.
 
 ### Key Functions
 
-{To be filled during implementation.}
+- **`GET /api/session/:id/models`** (app.ts) — One-time listener pattern with 10s timeout. Sends `get_available_models` RPC command, waits for `available_models` or `get_available_models_response` event.
+- **`PUT /api/session/:id/model`** (app.ts) — Validates `model` field, sends `set_model` RPC command, waits for `model_set` or `set_model_response` event.
+- **`ModelSwitcher`** (ModelSwitcher.tsx) — Standalone Preact component. Props: `sessionId`, `isRpcConnected`, `currentModel`, `onModelChange`. Renders a tappable Badge (interactive when RPC connected, read-only otherwise) that opens a BottomSheet with the model list.
 
 ## Rationale
 
