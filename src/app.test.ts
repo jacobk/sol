@@ -221,12 +221,24 @@ describe("POST /api/session/:id/connect", () => {
     expect(res.body.error).toBe("Session not found");
   });
 
-  it("spawns RPC subprocess and returns connected status", async () => {
+  it("spawns RPC subprocess and switches to session", async () => {
     mockIsConnected.mockReturnValue(false);
     mockSpawnRpc.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(true);
     mockListAll.mockResolvedValue([
       makeSessionInfo({ id: "sess-001", path: "/mock/sessions/session-001", cwd: "/mock/project" }),
     ]);
+    // Mock onEvent to immediately call back with switch_session response
+    mockOnEvent.mockImplementation((_sessionId: string, callback: (event: Record<string, unknown>) => void) => {
+      setTimeout(() => {
+        callback({
+          type: "response",
+          command: "switch_session",
+          success: true,
+          data: { cancelled: false },
+        });
+      }, 5);
+    });
 
     const res = await request(app).post("/api/session/sess-001/connect");
 
@@ -234,10 +246,14 @@ describe("POST /api/session/:id/connect", () => {
     expect(res.body.status).toBe("connected");
     expect(res.body.sessionId).toBe("sess-001");
     expect(mockSpawnRpc).toHaveBeenCalledWith("sess-001", "/mock/sessions", "/mock/project");
+    expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "switch_session", sessionPath: "/mock/sessions/session-001" });
   });
 
   it("returns already_connected if session is already active", async () => {
     mockIsConnected.mockReturnValue(true);
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001", path: "/mock/sessions/session-001", cwd: "/mock/project" }),
+    ]);
 
     const res = await request(app).post("/api/session/sess-001/connect");
 
@@ -745,5 +761,124 @@ describe("GET /api/session/:id/commands", () => {
     expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "get_commands" });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+});
+
+describe("POST /api/session/:id/fork", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 when session is not connected", async () => {
+    mockIsConnected.mockReturnValue(false);
+
+    const res = await request(app)
+      .post("/api/session/sess-001/fork")
+      .send({ entryId: "entry-123" });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not connected/i);
+  });
+
+  it("returns 400 when entryId is missing", async () => {
+    mockIsConnected.mockReturnValue(true);
+
+    const res = await request(app)
+      .post("/api/session/sess-001/fork")
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/entryId/i);
+  });
+
+  it("returns 500 when sendCommand fails", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(false);
+
+    const res = await request(app)
+      .post("/api/session/sess-001/fork")
+      .send({ entryId: "entry-123" });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Failed to send/i);
+  });
+
+  it("sends fork command with entryId on success", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(true);
+    mockOnEvent.mockImplementation((_sessionId: string, callback: (event: Record<string, unknown>) => void) => {
+      setTimeout(() => {
+        callback({
+          type: "response",
+          command: "fork",
+          success: true,
+          data: { text: "Original prompt text", cancelled: false },
+        });
+      }, 5);
+    });
+
+    const res = await request(app)
+      .post("/api/session/sess-001/fork")
+      .send({ entryId: "entry-123" });
+
+    expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "fork", entryId: "entry-123" });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.text).toBe("Original prompt text");
+  });
+
+  it("returns 409 when fork is cancelled by extension", async () => {
+    mockIsConnected.mockReturnValue(true);
+    mockSendCommand.mockReturnValue(true);
+    mockOnEvent.mockImplementation((_sessionId: string, callback: (event: Record<string, unknown>) => void) => {
+      setTimeout(() => {
+        callback({
+          type: "response",
+          command: "fork",
+          success: true,
+          data: { text: "Original prompt", cancelled: true },
+        });
+      }, 5);
+    });
+
+    const res = await request(app)
+      .post("/api/session/sess-001/fork")
+      .send({ entryId: "entry-123" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/cancelled/i);
+  });
+});
+
+describe("POST /api/sessions/new", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 400 when cwd is missing", async () => {
+    const res = await request(app)
+      .post("/api/sessions/new")
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/cwd/i);
+  });
+
+  it("returns 400 when cwd is not a string", async () => {
+    const res = await request(app)
+      .post("/api/sessions/new")
+      .send({ cwd: 123 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/cwd/i);
+  });
+
+  it("returns 400 when cwd does not exist", async () => {
+    const res = await request(app)
+      .post("/api/sessions/new")
+      .send({ cwd: "/nonexistent/path/that/does/not/exist" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not accessible|does not exist/i);
   });
 });

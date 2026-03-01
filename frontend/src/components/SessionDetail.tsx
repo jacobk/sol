@@ -10,6 +10,7 @@ import {
   MarkdownRenderer,
   Metadata,
   Stack,
+  SwipeableRow,
   Title,
   Toolbar,
 } from "./ui/index.js";
@@ -33,6 +34,7 @@ import { stripAnsi } from "../utils/text.js";
 import { useAutoScroll } from "../hooks/useAutoScroll.js";
 import { usePromptState } from "../hooks/usePromptState.js";
 import type { HistoryMessage } from "./HistoryPickerSheet.js";
+import { ForkActionSheet } from "./ForkActionSheet.js";
 
 /** Session entry types mirroring the backend API response */
 
@@ -1111,6 +1113,9 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
   const [activeModel, setActiveModel] = useState<string | undefined>(undefined);
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [forkSheetOpen, setForkSheetOpen] = useState(false);
+  const [forkEntryId, setForkEntryId] = useState<string | null>(null);
+  const [forkLoading, setForkLoading] = useState(false);
 
   // Use the auto-scroll hook
   const {
@@ -1177,11 +1182,10 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
   }, [data]);
 
   // Compute all branches for tree overview
+  // Tree view is available for all sessions (including single-branch linear sessions)
   const allBranches = useMemo((): TreeBranch[] => {
     if (!treeData) return [];
     const branches = collectAllBranches(treeData.tree);
-    // Only show tree overview if there are actual branches (>1 leaf)
-    if (branches.length <= 1) return [];
     // Mark active branch
     const activeLeaf = currentLeafId ?? data?.entries[data.entries.length - 1]?.id;
     return branches.map((b) => ({
@@ -1197,8 +1201,10 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
       const leafParam = leafId ? `?leafId=${encodeURIComponent(leafId)}` : "";
       const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}${leafParam}`);
       if (res.status === 404) {
-        setErrorMessage("Session not found");
-        setLoadState("error");
+        // Session not found in historical data - this is OK for new sessions
+        // Set data to empty state and continue (RPC connection will be checked separately)
+        setData({ header: null, entries: [] });
+        setLoadState("idle");
         return;
       }
       if (!res.ok) {
@@ -1426,6 +1432,63 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     setBranchSelectorOpen(true);
   }, []);
 
+  /** Open fork action sheet for a specific entry */
+  const openForkSheet = useCallback((entryId: string) => {
+    setForkEntryId(entryId);
+    setForkSheetOpen(true);
+  }, []);
+
+  /** Handle fork action */
+  const handleFork = useCallback(async () => {
+    if (!forkEntryId || !isRpcConnected) return;
+
+    setForkLoading(true);
+    try {
+      console.log("[Fork] Sending fork request:", { entryId: forkEntryId });
+      const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}/fork`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entryId: forkEntryId,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({ error: "Invalid response" })) as Record<string, unknown>;
+      console.log("[Fork] Response:", res.status, data);
+
+      if (!res.ok) {
+        const errorMsg = (data.error as string) || `HTTP ${res.status}`;
+        throw new Error(errorMsg);
+      }
+
+      // Fork successful - fetch the forked branch (ending at the fork entry)
+      // This shows the session "rewound" to the fork point
+      await fetchSession(forkEntryId);
+      await fetchTree();
+      
+      // Update current leaf to the fork point
+      setCurrentLeafId(forkEntryId);
+
+      // Close the fork sheet
+      setForkSheetOpen(false);
+      setForkEntryId(null);
+      
+      // Scroll to bottom (which is now the fork point)
+      scrollToBottom();
+    } catch (err) {
+      console.error("Fork failed:", err);
+      // Close the sheet and show error
+      setForkSheetOpen(false);
+      setForkEntryId(null);
+      const message = err instanceof Error ? err.message : "Fork failed";
+      setErrorMessage(message);
+      // Also alert so user sees it immediately
+      alert(`Fork failed: ${message}`);
+    } finally {
+      setForkLoading(false);
+    }
+  }, [forkEntryId, isRpcConnected, sessionId, fetchSession, fetchTree, scrollToBottom]);
+
   /** Compute branch options for the currently open branch selector */
   const branchOptions = useMemo((): BranchOption[] => {
     if (!branchSelectorEntryId || !childrenMap.has(branchSelectorEntryId)) return [];
@@ -1464,13 +1527,12 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
       });
     }
 
-    if (allBranches.length > 0) {
-      actions.push({
-        key: "tree",
-        label: "Tree",
-        onClick: () => setTreeOverviewOpen(true),
-      });
-    }
+    // Always show Tree button - tree view is useful for all sessions
+    actions.push({
+      key: "tree",
+      label: "Tree",
+      onClick: () => setTreeOverviewOpen(true),
+    });
 
     actions.push({
       key: "collapse",
@@ -1479,7 +1541,7 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     });
 
     return actions;
-  }, [isRpcConnected, isConnecting, connectToSession, onOpenFiles, allBranches.length, allCollapsed, toggleAll]);
+  }, [isRpcConnected, isConnecting, connectToSession, onOpenFiles, allCollapsed, toggleAll]);
 
   return (
     <div class="min-h-screen bg-bg-app" style="-webkit-overflow-scrolling: touch;">
@@ -1546,8 +1608,13 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
               const isSelfContainedTool = entry.type === "message" && 
                 (entry.message.role === "bashExecution" || entry.message.role === "toolResult");
 
-              return (
-                <div key={entry.id}>
+              // Determine if this entry is swipeable for fork (user messages only)
+              // Pi's fork command only works with user message entry IDs
+              const isSwipeable = isRpcConnected && entry.type === "message" && 
+                entry.message.role === "user";
+
+              const messageContent = (
+                <>
                   {isSelfContainedTool ? (
                     // Render directly - BashExecutionBubble/ToolResultBubble handle their own state
                     rendered
@@ -1569,6 +1636,28 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
                     >
                       <Badge variant="accent">{branchCount} branches</Badge>
                     </button>
+                  )}
+                </>
+              );
+
+              return (
+                <div key={entry.id}>
+                  {isSwipeable ? (
+                    <SwipeableRow
+                      actions={
+                        <button
+                          type="button"
+                          onClick={() => openForkSheet(entry.id)}
+                          class="h-full w-full bg-accent text-on-accent flex items-center justify-center font-medium text-sm active:bg-accent-hover"
+                        >
+                          Fork
+                        </button>
+                      }
+                    >
+                      {messageContent}
+                    </SwipeableRow>
+                  ) : (
+                    messageContent
                   )}
                 </div>
               );
@@ -1655,6 +1744,18 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         onClose={() => setTreeOverviewOpen(false)}
         branches={allBranches}
         onSelectBranch={handleSelectTreeBranch}
+      />
+
+      {/* Fork action sheet */}
+      <ForkActionSheet
+        open={forkSheetOpen}
+        onClose={() => {
+          setForkSheetOpen(false);
+          setForkEntryId(null);
+        }}
+        entryId={forkEntryId ?? ""}
+        onFork={handleFork}
+        loading={forkLoading}
       />
     </div>
   );

@@ -14,3 +14,4 @@
 | Testing Strategy | [testing-strategy.md](testing-strategy.md) | Planned | 007 |
 | UX Overhaul | [ux-overhaul.md](ux-overhaul.md) | Planned | 001, 006 |
 | Mobile Composer | [mobile-composer.md](mobile-composer.md) | Planned | 005, 006, 008 |
+| Session Management | [session-management.md](session-management.md) | Planned | 005, 006 |

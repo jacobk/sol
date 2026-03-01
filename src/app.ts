@@ -2,7 +2,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { listGroupedSessions, getSessionById, getSessionTree, getSessionBranch, searchSessions, searchSessionEntries, findSessionById } from "./sessions.js";
-import { spawnRpc, sendCommand, onEvent, offEvent, isConnected, killAllRpc, type RpcEventCallback } from "./rpc.js";
+import { spawnRpc, sendCommand, onEvent, offEvent, isConnected, killAllRpc, rekeyRpc, type RpcEventCallback } from "./rpc.js";
 import { startWatching, onEntry, offEntry, isWatching, stopAllWatchers, type SessionEntryCallback } from "./session-watcher.js";
 import { getGitStatus, getFileContent, getGitDiff, getGitTrackedFiles } from "./files.js";
 
@@ -107,14 +107,62 @@ app.post("/api/session/:id/connect", async (req, res) => {
     startWatching(sessionId, session.path);
 
     // Spawn RPC subprocess (for sending prompts/steer/abort)
-    if (!isConnected(sessionId)) {
+    const wasAlreadyConnected = isConnected(sessionId);
+    if (!wasAlreadyConnected) {
       spawnRpc(sessionId, path.dirname(session.path), session.cwd);
+
+      // Send switch_session to load the existing session file
+      // Pi spawns with a new session by default, so we need to load the historical one
+      console.log(`[connect] Switching to session file: ${session.path}`);
+      
+      const switchPromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          offEvent(sessionId, listener);
+          reject(new Error("Timeout waiting for switch_session response"));
+        }, 10_000);
+
+        const listener: RpcEventCallback = (event) => {
+          if (event.type === "response" && event.command === "switch_session") {
+            clearTimeout(timeout);
+            offEvent(sessionId, listener);
+            if (event.success === false) {
+              reject(new Error((event.error as string) || "Failed to switch session"));
+              return;
+            }
+            const data = event.data as { cancelled?: boolean } | undefined;
+            if (data?.cancelled) {
+              reject(new Error("Session switch was cancelled by an extension"));
+              return;
+            }
+            console.log(`[connect] Successfully switched to session`);
+            resolve();
+            return;
+          }
+          // Also handle parse errors
+          if (event.type === "response" && event.command === "parse" && event.success === false) {
+            clearTimeout(timeout);
+            offEvent(sessionId, listener);
+            reject(new Error((event.error as string) || "Failed to parse switch_session command"));
+            return;
+          }
+        };
+
+        onEvent(sessionId, listener);
+        const sent = sendCommand(sessionId, { type: "switch_session", sessionPath: session.path });
+        if (!sent) {
+          clearTimeout(timeout);
+          offEvent(sessionId, listener);
+          reject(new Error("Failed to send switch_session command"));
+        }
+      });
+
+      await switchPromise;
     }
 
     res.json({ status: "connected", sessionId });
   } catch (err) {
     console.error("Failed to connect to session:", err);
-    res.status(500).json({ error: "Failed to connect to session" });
+    res.status(500).json({ error: err instanceof Error ? err.message : "Failed to connect to session" });
   }
 });
 
@@ -436,6 +484,223 @@ app.put("/api/session/:id/model", (req, res) => {
     clearTimeout(timeout);
     offEvent(sessionId, listener);
     res.status(500).json({ error: "Failed to send command to RPC subprocess" });
+  }
+});
+
+// --- Session Management Endpoints ---
+
+// Fork a session from a specific entry
+// Creates a new branch point at the specified user message entry.
+// The session "rewinds" to the fork point, ready for new prompts.
+// Note: Pi's RPC fork command does not support summarization options.
+app.post("/api/session/:id/fork", async (req, res) => {
+  const sessionId = req.params.id;
+
+  if (!isConnected(sessionId)) {
+    res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
+    return;
+  }
+
+  const { entryId } = req.body as {
+    entryId?: string;
+  };
+
+  if (!entryId || typeof entryId !== "string") {
+    res.status(400).json({ error: "Missing required field: entryId" });
+    return;
+  }
+
+  console.log(`[fork] Starting fork for session ${sessionId}, entryId: ${entryId}`);
+
+  const timeout = setTimeout(() => {
+    console.log(`[fork] Timeout waiting for fork response for session ${sessionId}`);
+    offEvent(sessionId, listener);
+    res.status(504).json({ error: "Timeout waiting for fork response" });
+  }, 30_000); // Longer timeout for fork (may involve summarization)
+
+  const listener: RpcEventCallback = (event) => {
+    console.log(`[fork] Received RPC event for session ${sessionId}:`, JSON.stringify(event).slice(0, 500));
+    
+    // Handle successful fork response
+    if (event.type === "response" && event.command === "fork") {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      if (event.success === false) {
+        console.log(`[fork] Fork failed:`, event.error);
+        res.status(500).json({ error: "Fork failed", details: event.error });
+        return;
+      }
+      const data = event.data as { text?: string; cancelled?: boolean } | undefined;
+      if (data?.cancelled) {
+        console.log(`[fork] Fork was cancelled by extension`);
+        res.status(409).json({ error: "Fork was cancelled by an extension" });
+        return;
+      }
+      console.log(`[fork] Fork successful`);
+      res.json({
+        success: true,
+        text: data?.text,
+        // After fork, the session file has changed, but we continue with the same RPC subprocess
+        // The client should re-fetch the session to get the forked branch
+      });
+      return;
+    }
+    // Handle parse error (invalid command format or invalid entry ID)
+    if (event.type === "response" && event.command === "parse" && event.success === false) {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      const errorMsg = (event.error as string) || "Invalid fork command";
+      console.log(`[fork] Parse error:`, errorMsg);
+      res.status(400).json({ error: errorMsg });
+      return;
+    }
+    if (event.type === "rpc_exit" || event.type === "rpc_error") {
+      clearTimeout(timeout);
+      offEvent(sessionId, listener);
+      console.log(`[fork] RPC subprocess terminated:`, event);
+      res.status(500).json({ error: "RPC subprocess terminated", details: event });
+      return;
+    }
+  };
+
+  onEvent(sessionId, listener);
+
+  // Pi's RPC fork command takes only entryId - creates a branch point at that entry
+  console.log(`[fork] Sending fork command to RPC subprocess`);
+  const sent = sendCommand(sessionId, { type: "fork", entryId });
+  console.log(`[fork] Command sent: ${sent}`);
+  if (!sent) {
+    clearTimeout(timeout);
+    offEvent(sessionId, listener);
+    res.status(500).json({ error: "Failed to send fork command to RPC subprocess" });
+  }
+});
+
+// Create a new session in a given working directory
+app.post("/api/sessions/new", async (req, res) => {
+  const { cwd } = req.body as { cwd?: string };
+
+  if (!cwd || typeof cwd !== "string") {
+    res.status(400).json({ error: "Missing required field: cwd" });
+    return;
+  }
+
+  // Validate that cwd exists and is a directory
+  try {
+    const fs = await import("node:fs/promises");
+    const stat = await fs.stat(cwd);
+    if (!stat.isDirectory()) {
+      res.status(400).json({ error: "cwd is not a directory" });
+      return;
+    }
+  } catch {
+    res.status(400).json({ error: "cwd does not exist or is not accessible" });
+    return;
+  }
+
+  // Generate a temporary session ID for the new subprocess
+  // We'll replace this with the real session ID once pi creates the session
+  const tempSessionId = `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  // Spawn RPC subprocess in the target cwd
+  // Pass empty session-dir to let pi create a new session file
+  const spawned = spawnRpc(tempSessionId, "", cwd);
+  if (!spawned) {
+    res.status(500).json({ error: "Failed to spawn RPC subprocess" });
+    return;
+  }
+
+  // Helper to get the real session ID via get_state after new_session succeeds
+  const getRealSessionId = (): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const stateTimeout = setTimeout(() => {
+        offEvent(tempSessionId, stateListener);
+        reject(new Error("Timeout waiting for get_state response"));
+      }, 5000);
+
+      const stateListener: RpcEventCallback = (event) => {
+        if (event.type === "response" && event.command === "get_state") {
+          clearTimeout(stateTimeout);
+          offEvent(tempSessionId, stateListener);
+          if (event.success === false) {
+            reject(new Error("get_state failed"));
+            return;
+          }
+          const data = event.data as { sessionId?: string } | undefined;
+          if (data?.sessionId) {
+            resolve(data.sessionId);
+          } else {
+            reject(new Error("No sessionId in get_state response"));
+          }
+        }
+        if (event.type === "rpc_exit" || event.type === "rpc_error") {
+          clearTimeout(stateTimeout);
+          offEvent(tempSessionId, stateListener);
+          reject(new Error("RPC subprocess terminated"));
+        }
+      };
+
+      onEvent(tempSessionId, stateListener);
+      sendCommand(tempSessionId, { type: "get_state" });
+    });
+  };
+
+  // Send new_session command to initialize
+  const timeout = setTimeout(() => {
+    offEvent(tempSessionId, listener);
+    res.status(504).json({ error: "Timeout waiting for new_session response" });
+  }, 10_000);
+
+  const listener: RpcEventCallback = (event) => {
+    if (event.type === "response" && event.command === "new_session") {
+      clearTimeout(timeout);
+      offEvent(tempSessionId, listener);
+      if (event.success === false) {
+        res.status(500).json({ error: "new_session failed", details: event.error });
+        return;
+      }
+      const data = event.data as { cancelled?: boolean } | undefined;
+      if (data?.cancelled) {
+        res.status(409).json({ error: "New session was cancelled by an extension" });
+        return;
+      }
+
+      // Get the real session ID from pi and re-key the RPC process
+      getRealSessionId()
+        .then((realSessionId) => {
+          // Re-key the RPC process under the real session ID
+          rekeyRpc(tempSessionId, realSessionId);
+          res.json({
+            success: true,
+            sessionId: realSessionId,
+            cwd,
+          });
+        })
+        .catch((err) => {
+          // Fall back to temp ID if we can't get the real one
+          console.error("Failed to get real session ID:", err);
+          res.json({
+            success: true,
+            sessionId: tempSessionId,
+            cwd,
+          });
+        });
+      return;
+    }
+    if (event.type === "rpc_exit" || event.type === "rpc_error") {
+      clearTimeout(timeout);
+      offEvent(tempSessionId, listener);
+      res.status(500).json({ error: "RPC subprocess terminated", details: event });
+      return;
+    }
+  };
+
+  onEvent(tempSessionId, listener);
+  const sent = sendCommand(tempSessionId, { type: "new_session" });
+  if (!sent) {
+    clearTimeout(timeout);
+    offEvent(tempSessionId, listener);
+    res.status(500).json({ error: "Failed to send new_session command to RPC subprocess" });
   }
 });
 

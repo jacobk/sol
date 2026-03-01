@@ -1,7 +1,8 @@
 import type { JSX } from "preact";
-import { useState, useEffect, useCallback } from "preact/hooks";
+import { useState, useEffect, useCallback, useMemo } from "preact/hooks";
 import { Body, Button, Container, Metadata, Stack, Title } from "./ui/index.js";
 import { SessionCard, type SessionResponse } from "./SessionCard.js";
+import { ProjectSelectorSheet } from "./ProjectSelectorSheet.js";
 
 interface GroupedSessions {
   project: string;
@@ -19,6 +20,7 @@ function projectDisplayName(project: string): string {
 interface SessionListProps {
   onSelectSession: (id: string) => void;
   onOpenSearch: () => void;
+  onNewSession?: (sessionId: string) => void;
 }
 
 function EmptyState(): JSX.Element {
@@ -33,10 +35,12 @@ function EmptyState(): JSX.Element {
   );
 }
 
-export function SessionList({ onSelectSession, onOpenSearch }: SessionListProps): JSX.Element {
+export function SessionList({ onSelectSession, onOpenSearch, onNewSession }: SessionListProps): JSX.Element {
   const [groups, setGroups] = useState<GroupedSessions[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
+  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
 
   const fetchSessions = useCallback(async () => {
     setLoadState("loading");
@@ -58,6 +62,46 @@ export function SessionList({ onSelectSession, onOpenSearch }: SessionListProps)
   useEffect(() => {
     void fetchSessions();
   }, [fetchSessions]);
+
+  // Extract unique project paths from session groups
+  const projects = useMemo(() => {
+    return groups.map((g) => g.project);
+  }, [groups]);
+
+  // Handle creating a new session in a project
+  const handleCreateSession = useCallback(async (cwd: string) => {
+    setCreatingSession(true);
+    try {
+      const res = await fetch("/api/sessions/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Unknown error" })) as { error: string };
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json() as { success: boolean; sessionId: string; cwd: string };
+
+      // Close the project selector
+      setProjectSelectorOpen(false);
+
+      // Navigate to the new session
+      if (onNewSession) {
+        onNewSession(data.sessionId);
+      } else {
+        // Fallback: use onSelectSession
+        onSelectSession(data.sessionId);
+      }
+    } catch (err) {
+      console.error("Failed to create session:", err);
+      setErrorMessage(err instanceof Error ? err.message : "Failed to create session");
+    } finally {
+      setCreatingSession(false);
+    }
+  }, [onNewSession, onSelectSession]);
 
   return (
     <div class="min-h-screen bg-bg-app">
@@ -86,7 +130,7 @@ export function SessionList({ onSelectSession, onOpenSearch }: SessionListProps)
       </div>
 
       {/* Content */}
-      <Container class="py-4">
+      <Container class="py-4 pb-24">
         {loadState === "error" && (
           <div class="bg-state-error/10 text-state-error rounded-lg p-4 mb-4">
             <Body class="text-state-error">Failed to load sessions: {errorMessage}</Body>
@@ -124,6 +168,27 @@ export function SessionList({ onSelectSession, onOpenSearch }: SessionListProps)
           ))}
         </Stack>
       </Container>
+
+      {/* Floating New Session button - always visible */}
+      <div class="fixed bottom-6 right-6 z-20">
+        <button
+          type="button"
+          onClick={() => setProjectSelectorOpen(true)}
+          class="w-14 h-14 rounded-full bg-accent text-on-accent shadow-lg flex items-center justify-center text-2xl font-bold active:bg-accent-hover transition-colors"
+          aria-label="New session"
+        >
+          +
+        </button>
+      </div>
+
+      {/* Project selector sheet */}
+      <ProjectSelectorSheet
+        open={projectSelectorOpen}
+        onClose={() => setProjectSelectorOpen(false)}
+        projects={projects}
+        onSelect={handleCreateSession}
+        loading={creatingSession}
+      />
     </div>
   );
 }

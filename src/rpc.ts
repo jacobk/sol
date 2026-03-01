@@ -166,6 +166,21 @@ export function isConnected(sessionId: string): boolean {
 }
 
 /**
+ * Re-key an RPC subprocess under a new session ID.
+ * Used when a temporary session ID needs to be replaced with the real one.
+ * Returns true if successful, false if oldId not found or newId already exists.
+ */
+export function rekeyRpc(oldSessionId: string, newSessionId: string): boolean {
+  const rpc = activeProcesses.get(oldSessionId);
+  if (!rpc) return false;
+  if (activeProcesses.has(newSessionId)) return false;
+
+  activeProcesses.delete(oldSessionId);
+  activeProcesses.set(newSessionId, rpc);
+  return true;
+}
+
+/**
  * Kill the RPC subprocess for a session.
  * Sends abort command first, then terminates.
  */

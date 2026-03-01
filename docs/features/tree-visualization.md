@@ -56,3 +56,7 @@ From [PRD 001](../PRD/001-sol.md) Section 2.3:
 
 1. Can only view one branch at a time — no side-by-side comparison.
 2. Deep trees with many branches may require many taps to explore.
+
+## Related Features
+
+- [Session Management](session-management.md) - Extends tree access to all sessions and adds fork-from-message capability

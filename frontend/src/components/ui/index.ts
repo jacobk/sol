@@ -22,3 +22,6 @@ export { Toolbar } from "./Toolbar.js";
 
 // Metadata
 export { Badge } from "./Badge.js";
+
+// Gestures
+export { SwipeableRow } from "./SwipeableRow.js";

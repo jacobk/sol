@@ -95,6 +95,11 @@ export function App() {
         setSearchQuery("");
         setView("detail");
       }}
+      onNewSession={(id) => {
+        setSelectedSessionId(id);
+        setSearchQuery("");
+        setView("detail");
+      }}
       onOpenSearch={() => setView("search")}
     />
   );

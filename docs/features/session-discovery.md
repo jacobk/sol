@@ -56,3 +56,7 @@ From [PRD 001](../PRD/001-sol.md) Section 2.1:
 
 1. No caching — every request re-scans the sessions directory. Fine for <100 sessions, may need `fs.watch()` caching for larger sets.
 2. No pagination — all sessions returned in one response.
+
+## Related Features
+
+- [Session Management](session-management.md) - Adds "New Session" creation from the session list
