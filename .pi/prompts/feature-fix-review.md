@@ -1,7 +1,7 @@
 ---
 description: Analyze review feedback in the ticket you just implemented and fix issues
 ---
-Look at the **Review Feedback** section at the bottom of the ticket you just implemented (`docs/tickets/{ticket}.md`). The `/review-feature` process appends feedback directly into the ticket file.
+Look at the **Review Feedback** section at the bottom of the ticket you just implemented (`docs/tickets/{ticket}.md`). The `/feature-review` process appends feedback directly into the ticket file.
 
 Follow these steps:
 

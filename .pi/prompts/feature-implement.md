@@ -18,4 +18,4 @@ Implementation rules:
 - **Run the ticket's verification checklist** (`npm run build` at minimum) before declaring done.
 - **Update the ticket status** to "In Review" when complete.
 
-When finished, remind the user to run `/review-feature` to validate the implementation.
+When finished, remind the user to run `/feature-review` to validate the implementation.
