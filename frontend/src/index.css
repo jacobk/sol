@@ -1,14 +1,52 @@
 @import "tailwindcss";
 
 @theme {
-  /* Placeholder tokens — TICKET-003 will define the full design system */
+  /* === Colors: Semantic Tokens === */
+
+  /* Backgrounds */
+  --color-bg-app: #000000;
   --color-surface: #111827;
   --color-surface-2: #1f2937;
-  --color-background: #000000;
-  --color-primary: #2563eb;
-  --color-text-main: #f9fafb;
+
+  /* Text */
+  --color-text-primary: #f9fafb;
   --color-text-muted: #9ca3af;
+
+  /* Borders */
   --color-border-subtle: #1f2937;
+
+  /* Accent */
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-text: #60a5fa;
+
+  /* Status */
   --color-state-error: #f87171;
   --color-state-success: #34d399;
+  --color-state-warning: #fbbf24;
+
+  /* Roles (chat bubbles) */
+  --color-role-user: #2563eb;
+  --color-role-assistant: #8b5cf6;
+  --color-role-tool: #059669;
+  --color-role-tool-result: #0891b2;
+
+  /* === Spacing & Sizing === */
+  --spacing-touch: 44px;
+}
+
+/* Base styles */
+html {
+  background-color: var(--color-bg-app);
+  color: var(--color-text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
 }

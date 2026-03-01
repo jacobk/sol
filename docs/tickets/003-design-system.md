@@ -2,7 +2,7 @@
 
 **Related:** ADR 006, PRD 002
 **Feature:** [Design System & UI Kit](../features/design-system.md)
-**Status:** Ready for Implementation (depends on TICKET-001, TICKET-002)
+**Status:** In Review
 **Created:** 2026-03-01
 
 ## Context to Load
