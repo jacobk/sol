@@ -2,7 +2,7 @@
 
 **Related:** ADR 005, ADR 001, PRD 001 Section 3.3, 3.4
 **Feature:** [Prompt Input & Streaming](../features/prompt-and-streaming.md)
-**Status:** Ready for Implementation (depends on TICKET-003, TICKET-005, TICKET-008)
+**Status:** Completed
 **Created:** 2026-03-01
 
 ## Context to Load
@@ -70,6 +70,7 @@ curl -X POST http://localhost:8081/api/session/<id>/prompt -H 'Content-Type: app
 
 - [ ] `POST /api/session/:id/prompt` sends a prompt to the active session
 - [ ] `POST /api/session/:id/abort` aborts the current operation
+- [ ] `POST /api/session/:id/steer` sends a steer command
 - [ ] PromptInput auto-resizes and supports iOS dictation
 - [ ] Send button transforms to abort button during streaming
 - [ ] Streaming tokens render incrementally with <50ms perceived latency

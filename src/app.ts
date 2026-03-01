@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { listGroupedSessions, getSessionById, getSessionTree, getSessionBranch, searchSessions, searchSessionEntries, findSessionById } from "./sessions.js";
 import { spawnRpc, sendCommand, onEvent, offEvent, isConnected, killAllRpc, type RpcEventCallback } from "./rpc.js";
+import { startWatching, onEntry, offEntry, isWatching, stopAllWatchers, type SessionEntryCallback } from "./session-watcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -89,16 +90,10 @@ app.get("/api/tree/:id", async (req, res) => {
 
 // --- Active Session (RPC) Endpoints ---
 
-// Connect to a session — spawn RPC subprocess
+// Connect to a session — spawn RPC subprocess AND start file watcher
 app.post("/api/session/:id/connect", async (req, res) => {
   try {
     const sessionId = req.params.id;
-
-    // If already connected, return existing status
-    if (isConnected(sessionId)) {
-      res.json({ status: "already_connected", sessionId });
-      return;
-    }
 
     // Look up session to get path and cwd
     const session = await findSessionById(sessionId);
@@ -107,24 +102,29 @@ app.post("/api/session/:id/connect", async (req, res) => {
       return;
     }
 
-    const spawned = spawnRpc(sessionId, path.dirname(session.path), session.cwd);
-    if (spawned) {
-      res.json({ status: "connected", sessionId });
-    } else {
-      // Race condition: another request connected between our check and spawn
-      res.json({ status: "already_connected", sessionId });
+    // Start file watcher (always, for monitoring)
+    startWatching(sessionId, session.path);
+
+    // Spawn RPC subprocess (for sending prompts/steer/abort)
+    if (!isConnected(sessionId)) {
+      spawnRpc(sessionId, path.dirname(session.path), session.cwd);
     }
+
+    res.json({ status: "connected", sessionId });
   } catch (err) {
     console.error("Failed to connect to session:", err);
     res.status(500).json({ error: "Failed to connect to session" });
   }
 });
 
-// Stream RPC events via SSE
+// Stream session events via SSE.
+// Merges two sources:
+// 1. File watcher — new entries appended to the JSONL file by ANY pi process
+// 2. RPC events — streaming deltas, tool execution from Sol's own subprocess
 app.get("/api/session/:id/stream", (req, res) => {
   const sessionId = req.params.id;
 
-  if (!isConnected(sessionId)) {
+  if (!isWatching(sessionId) && !isConnected(sessionId)) {
     res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
     return;
   }
@@ -141,23 +141,128 @@ app.get("/api/session/:id/stream", (req, res) => {
   // Send initial connected event
   res.write(`data: ${JSON.stringify({ type: "connected", sessionId })}\n\n`);
 
-  // Forward RPC events to SSE
-  const listener: RpcEventCallback = (event) => {
-    // If the subprocess exited or errored, send the event and close
-    if (event.type === "rpc_exit" || event.type === "rpc_error") {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-      res.end();
-      return;
+  // Forward file watcher entries (new entries from any pi process)
+  const fileListener: SessionEntryCallback = (entry) => {
+    try {
+      res.write(`data: ${JSON.stringify({ type: "session_entry", entry })}\n\n`);
+    } catch {
+      // Client disconnected — ignore
     }
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
-  onEvent(sessionId, listener);
+  // Forward RPC events (streaming deltas from Sol's subprocess)
+  const rpcListener: RpcEventCallback = (event) => {
+    try {
+      if (event.type === "rpc_exit" || event.type === "rpc_error") {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        return;
+      }
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      // Client disconnected — ignore
+    }
+  };
+
+  if (isWatching(sessionId)) {
+    onEntry(sessionId, fileListener);
+  }
+  if (isConnected(sessionId)) {
+    onEvent(sessionId, rpcListener);
+  }
 
   // Clean up on client disconnect
   req.on("close", () => {
-    offEvent(sessionId, listener);
+    offEntry(sessionId, fileListener);
+    if (isConnected(sessionId)) {
+      offEvent(sessionId, rpcListener);
+    }
   });
+});
+
+// Send prompt to active session
+app.post("/api/session/:id/prompt", (req, res) => {
+  const sessionId = req.params.id;
+
+  if (!isConnected(sessionId)) {
+    res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
+    return;
+  }
+
+  const { message } = req.body as { message?: string };
+  if (!message || typeof message !== "string") {
+    res.status(400).json({ error: "Missing required field: message" });
+    return;
+  }
+
+  const sent = sendCommand(sessionId, { type: "prompt", message });
+  if (sent) {
+    res.json({ status: "sent" });
+  } else {
+    res.status(500).json({ error: "Failed to send prompt to RPC subprocess" });
+  }
+});
+
+// Steer active session
+app.post("/api/session/:id/steer", (req, res) => {
+  const sessionId = req.params.id;
+
+  if (!isConnected(sessionId)) {
+    res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
+    return;
+  }
+
+  const { message } = req.body as { message?: string };
+  if (!message || typeof message !== "string") {
+    res.status(400).json({ error: "Missing required field: message" });
+    return;
+  }
+
+  const sent = sendCommand(sessionId, { type: "steer", message });
+  if (sent) {
+    res.json({ status: "sent" });
+  } else {
+    res.status(500).json({ error: "Failed to send steer to RPC subprocess" });
+  }
+});
+
+// Abort current operation
+app.post("/api/session/:id/abort", (req, res) => {
+  const sessionId = req.params.id;
+
+  if (!isConnected(sessionId)) {
+    res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
+    return;
+  }
+
+  const sent = sendCommand(sessionId, { type: "abort" });
+  if (sent) {
+    res.json({ status: "sent" });
+  } else {
+    res.status(500).json({ error: "Failed to send abort to RPC subprocess" });
+  }
+});
+
+// Send follow-up to active session
+app.post("/api/session/:id/follow_up", (req, res) => {
+  const sessionId = req.params.id;
+
+  if (!isConnected(sessionId)) {
+    res.status(404).json({ error: "Session not connected. Call POST /api/session/:id/connect first." });
+    return;
+  }
+
+  const { message } = req.body as { message?: string };
+  if (!message || typeof message !== "string") {
+    res.status(400).json({ error: "Missing required field: message" });
+    return;
+  }
+
+  const sent = sendCommand(sessionId, { type: "follow_up", message });
+  if (sent) {
+    res.json({ status: "sent" });
+  } else {
+    res.status(500).json({ error: "Failed to send follow_up to RPC subprocess" });
+  }
 });
 
 // Get session state via RPC

@@ -24,6 +24,8 @@ import {
   type BranchOption,
   type TreeBranch,
 } from "./BranchSelector.js";
+import { PromptInput } from "./PromptInput.js";
+import { StreamingMessageContainer } from "./StreamingMessage.js";
 
 /** Session entry types mirroring the backend API response */
 
@@ -755,6 +757,9 @@ export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailP
   const [branchSelectorOpen, setBranchSelectorOpen] = useState(false);
   const [branchSelectorEntryId, setBranchSelectorEntryId] = useState<string | null>(null);
   const [treeOverviewOpen, setTreeOverviewOpen] = useState(false);
+  const [isRpcConnected, setIsRpcConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -832,6 +837,30 @@ export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailP
     }
   }, [sessionId, searchQuery]);
 
+  /**
+   * Handle a new session entry arriving from the file watcher SSE.
+   * Appends it to the current entry list in real-time.
+   */
+  const handleSessionEntry = useCallback((rawEntry: Record<string, unknown>) => {
+    const entry = rawEntry as unknown as SessionEntry;
+    if (!entry.id || !entry.type) return;
+
+    setData((prev) => {
+      if (!prev) return prev;
+      // Avoid duplicates
+      if (prev.entries.some((e) => e.id === entry.id)) return prev;
+      return { ...prev, entries: [...prev.entries, entry] };
+    });
+
+    // Set default collapsed state for new entry
+    if (isRenderable(entry)) {
+      setCollapsedMap((prev) => {
+        if (entry.id in prev) return prev;
+        return { ...prev, [entry.id]: shouldCollapseByDefault(entry) };
+      });
+    }
+  }, []);
+
   const fetchTree = useCallback(async () => {
     try {
       const res = await fetch(`/api/tree/${encodeURIComponent(sessionId)}`);
@@ -848,6 +877,55 @@ export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailP
     void fetchSession();
     void fetchTree();
   }, [fetchSession, fetchTree]);
+
+  // Check if this session already has an active RPC connection.
+  // Probe the SSE stream endpoint: 404 means not connected, 200 means connected.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const probeConnection = async (): Promise<void> => {
+      try {
+        const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}/stream`, {
+          signal: controller.signal,
+        });
+        if (!cancelled && res.ok) {
+          setIsRpcConnected(true);
+        }
+        // Always close the stream — we only needed to check the status code
+        res.body?.cancel();
+      } catch {
+        // Not connected or aborted — that's fine
+      }
+    };
+    void probeConnection();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [sessionId]);
+
+  /** Connect to the session's RPC subprocess */
+  const connectToSession = useCallback(async () => {
+    setIsConnecting(true);
+    try {
+      const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}/connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Unknown error" })) as { error: string };
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      setIsRpcConnected(true);
+    } catch (err) {
+      console.error("Failed to connect:", err);
+      setErrorMessage(err instanceof Error ? err.message : "Failed to connect");
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [sessionId]);
 
   // Track scroll position to show/hide "jump to bottom" button
   useEffect(() => {
@@ -894,6 +972,33 @@ export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailP
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  /** Abort the current operation */
+  const handleAbort = useCallback(async () => {
+    try {
+      await fetch(`/api/session/${encodeURIComponent(sessionId)}/abort`, {
+        method: "POST",
+      });
+    } catch (err) {
+      console.error("Failed to abort:", err);
+    }
+  }, [sessionId]);
+
+  /** Auto-scroll when new streaming content arrives */
+  const handleNewStreamingMessage = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  /** Auto-scroll during streaming if user is near the bottom */
+  const handleStreamActivity = useCallback(() => {
+    const scrollTop = window.scrollY;
+    const windowHeight = window.innerHeight;
+    const docHeight = document.documentElement.scrollHeight;
+    // Auto-scroll if within 1.5 screens of the bottom
+    if (docHeight - scrollTop - windowHeight < windowHeight * 1.5) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, []);
 
   /** Handle selecting a branch from the branch selector */
@@ -962,6 +1067,19 @@ export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailP
           </Title>
           {data && (
             <div class="flex items-center gap-1">
+              {!isRpcConnected && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={connectToSession}
+                  disabled={isConnecting}
+                >
+                  {isConnecting ? "Connecting…" : "▶ Connect"}
+                </Button>
+              )}
+              {isRpcConnected && (
+                <Badge variant="accent">Live</Badge>
+              )}
               {allBranches.length > 0 && (
                 <IconButton
                   label="Tree overview"
@@ -1031,15 +1149,40 @@ export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailP
         )}
 
         {/* Bottom anchor for scroll-to-bottom */}
-        <div ref={bottomRef} />
+        <div ref={bottomRef} class={isRpcConnected ? "pb-24" : ""} />
       </Container>
+
+      {/* Streaming messages (active session only) */}
+      {isRpcConnected && (
+        <Container class="pb-4">
+          <StreamingMessageContainer
+            sessionId={sessionId}
+            onStreamingChange={setIsStreaming}
+            onNewMessage={handleNewStreamingMessage}
+            onStreamActivity={handleStreamActivity}
+            onSessionEntry={handleSessionEntry}
+          />
+        </Container>
+      )}
+
+      {/* Prompt input (active session only) */}
+      {isRpcConnected && (
+        <div class="fixed bottom-0 left-0 right-0 z-20">
+          <PromptInput
+            sessionId={sessionId}
+            isStreaming={isStreaming}
+            onAbort={handleAbort}
+            onPromptSent={scrollToBottom}
+          />
+        </div>
+      )}
 
       {/* Jump to bottom floating button */}
       {showScrollToBottom && (
         <button
           type="button"
           onClick={scrollToBottom}
-          class="fixed bottom-6 right-6 z-20 bg-accent text-white rounded-full w-12 h-12 flex items-center justify-center shadow-lg active:bg-accent-hover transition-colors duration-100"
+          class={`fixed ${isRpcConnected ? "bottom-20" : "bottom-6"} right-6 z-20 bg-accent text-white rounded-full w-12 h-12 flex items-center justify-center shadow-lg active:bg-accent-hover transition-colors duration-100`}
           aria-label="Jump to bottom"
         >
           ↓

@@ -25,11 +25,19 @@ From [PRD 001](../PRD/001-sol.md) Section 2.2:
 
 ### Data Flow
 
-{To be filled during implementation.}
+1. User types in `PromptInput` → sends POST to `/api/session/:id/prompt` (or `/steer`, `/abort`)
+2. Express route calls `sendCommand()` from `src/rpc.ts` → writes JSON to pi subprocess stdin
+3. Pi subprocess emits `message_update`, `tool_execution_*` events on stdout as JSON lines
+4. SSE route (`/api/session/:id/stream`) forwards events to browser via `EventSource`
+5. `StreamingMessageContainer` receives SSE events → incrementally updates DOM via `StreamingMessageBubble`
+6. Tool executions rendered as compact `ToolExecutionIndicator` components (collapsed by default, expandable)
 
 ### Key Functions
 
-{To be filled during implementation.}
+- `src/app.ts`: `POST /api/session/:id/prompt`, `POST /api/session/:id/steer`, `POST /api/session/:id/abort` — thin wrappers around `sendCommand()`
+- `PromptInput.tsx`: Auto-resizing textarea with send/abort toggle, long-press for delivery mode selection (prompt/steer/follow_up)
+- `StreamingMessageContainer`: Connects to SSE, parses events, manages streaming message and tool execution state
+- `StreamingMessageBubble`: Incremental DOM text append for <50ms perceived latency
 
 ## Rationale
 

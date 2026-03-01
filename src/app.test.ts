@@ -30,6 +30,20 @@ vi.mock("./rpc.js", () => ({
   killAllRpc: () => mockKillAllRpc(),
 }));
 
+const mockStartWatching = vi.fn();
+const mockStopWatching = vi.fn();
+const mockOnEntry = vi.fn();
+const mockOffEntry = vi.fn();
+const mockIsWatching = vi.fn<(sessionId: string) => boolean>();
+
+vi.mock("./session-watcher.js", () => ({
+  startWatching: (...args: unknown[]) => mockStartWatching(...args),
+  stopWatching: (...args: unknown[]) => mockStopWatching(...args),
+  onEntry: (...args: unknown[]) => mockOnEntry(...args),
+  offEntry: (...args: unknown[]) => mockOffEntry(...args),
+  isWatching: (...args: unknown[]) => mockIsWatching(...(args as [string])),
+}));
+
 const { app } = await import("./app.js");
 
 function makeSessionInfo(overrides: Partial<SessionInfo> = {}): SessionInfo {
@@ -215,7 +229,7 @@ describe("POST /api/session/:id/connect", () => {
     const res = await request(app).post("/api/session/sess-001/connect");
 
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe("already_connected");
+    expect(res.body.status).toBe("connected");
     expect(mockSpawnRpc).not.toHaveBeenCalled();
   });
 });
@@ -225,8 +239,9 @@ describe("GET /api/session/:id/stream", () => {
     vi.clearAllMocks();
   });
 
-  it("returns 404 if session is not connected", async () => {
+  it("returns 404 if session is not connected and not watching", async () => {
     mockIsConnected.mockReturnValue(false);
+    mockIsWatching.mockReturnValue(false);
 
     const res = await request(app).get("/api/session/sess-001/stream");
 

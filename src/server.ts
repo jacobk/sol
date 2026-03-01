@@ -1,15 +1,17 @@
 import { app } from "./app.js";
 import { killAllRpc } from "./rpc.js";
+import { stopAllWatchers } from "./session-watcher.js";
 
 const PORT = 8081;
 const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`Sol server listening on http://0.0.0.0:${PORT}`);
 });
 
-// Graceful shutdown — terminate all active RPC subprocesses
+// Graceful shutdown — terminate all active RPC subprocesses and file watchers
 function shutdown(signal: string): void {
   console.log(`\n[server] Received ${signal}, shutting down...`);
   killAllRpc();
+  stopAllWatchers();
   server.close(() => {
     console.log("[server] HTTP server closed");
     process.exit(0);

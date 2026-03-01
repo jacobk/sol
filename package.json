@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "latest",
+    "@preact/signals": "^2.8.1",
     "express": "^4.21.0"
   },
   "devDependencies": {
