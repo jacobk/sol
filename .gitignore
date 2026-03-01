@@ -4,4 +4,3 @@ frontend/dist/
 *.log
 agent_error_*.log
 .DS_Store
-.plans
