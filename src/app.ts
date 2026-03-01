@@ -1,7 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listGroupedSessions, getSessionById } from "./sessions.js";
+import { listGroupedSessions, getSessionById, getSessionTree, getSessionBranch } from "./sessions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,7 +28,10 @@ app.get("/api/sessions", async (_req, res) => {
 // Session detail endpoint
 app.get("/api/session/:id", async (req, res) => {
   try {
-    const result = await getSessionById(req.params.id);
+    const leafId = typeof req.query.leafId === "string" ? req.query.leafId : undefined;
+    const result = leafId
+      ? await getSessionBranch(req.params.id, leafId)
+      : await getSessionById(req.params.id);
     if (!result) {
       res.status(404).json({ error: "Session not found" });
       return;
@@ -37,6 +40,21 @@ app.get("/api/session/:id", async (req, res) => {
   } catch (err) {
     console.error("Failed to get session:", err);
     res.status(500).json({ error: "Failed to get session" });
+  }
+});
+
+// Tree structure endpoint
+app.get("/api/tree/:id", async (req, res) => {
+  try {
+    const result = await getSessionTree(req.params.id);
+    if (!result) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    console.error("Failed to get session tree:", err);
+    res.status(500).json({ error: "Failed to get session tree" });
   }
 });
 

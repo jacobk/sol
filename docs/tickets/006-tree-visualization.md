@@ -2,7 +2,7 @@
 
 **Related:** ADR 004, PRD 001 Section 3.7
 **Feature:** [Tree Visualization](../features/tree-visualization.md)
-**Status:** Ready for Implementation (depends on TICKET-005)
+**Status:** Review Failed (Needs Refactoring)
 **Created:** 2026-03-01
 
 ## Context to Load
@@ -35,7 +35,7 @@ A button in the session detail header that toggles a compact tree summary view. 
 - [ ] **Modularity** — Tree serialization logic in `src/sessions.ts`, separate from route handler
 - [ ] **DRY check** — Branch preview text extraction reuses the content extraction utility from TICKET-005
 
-**Specific refactoring tasks:** Verify that the content extraction utility from TICKET-005 handles all entry types needed for tree node summaries.
+**Specific refactoring tasks:** Verify that the content extraction utility from TICKET-005 handles all entry types needed for tree node summaries. The current implementation duplicates this logic in `src/sessions.ts` (`extractEntryPreview`). It should reuse `frontend/src/utils/content.ts` or move the utility to a shared location to satisfy the DRY check.
 
 ## Testing Requirements
 
@@ -45,6 +45,10 @@ A button in the session detail header that toggles a compact tree summary view. 
 npm run build  # Must pass
 curl http://localhost:8081/api/tree/<id> | jq '. | length'
 ```
+
+## Review Feedback
+1. **DRY check failed**: `extractEntryPreview` in `src/sessions.ts` duplicates logic from `frontend/src/utils/content.ts` instead of reusing it. While they can't easily share the exact same file right now without TS compiler adjustments, the ticket specifically requested to "reuse the content extraction utility from TICKET-005". At a minimum, `src/sessions.ts` should be calling an exported utility rather than having a monolithic inline `extractEntryPreview` that replicates `extractTextFromBlocks` and `truncate`. You might consider creating a `shared/` folder accessible to both if possible, or updating `tsconfig.json` paths, but as it stands, it fails the DRY requirement.
+2. The implementation looks mostly solid and matches ADR 004 and PRD 001. Once the refactoring is done, it should be good to go.
 
 ## Acceptance Criteria
 

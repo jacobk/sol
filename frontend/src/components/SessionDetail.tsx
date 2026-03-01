@@ -1,5 +1,5 @@
 import type { JSX } from "preact";
-import { useState, useEffect, useCallback, useRef } from "preact/hooks";
+import { useState, useEffect, useCallback, useRef, useMemo } from "preact/hooks";
 import {
   Badge,
   Body,
@@ -18,6 +18,12 @@ import {
   type ContentBlock,
   type ExtractedContent,
 } from "../utils/content.js";
+import {
+  BranchSelector,
+  TreeOverview,
+  type BranchOption,
+  type TreeBranch,
+} from "./BranchSelector.js";
 
 /** Session entry types mirroring the backend API response */
 
@@ -162,6 +168,23 @@ interface SessionHeader {
 interface SessionDetailData {
   header: SessionHeader | null;
   entries: SessionEntry[];
+}
+
+/** Tree node from the /api/tree/:id endpoint */
+interface TreeNode {
+  id: string;
+  parentId: string | null;
+  type: string;
+  role: string | null;
+  timestamp: string;
+  preview: string;
+  childCount: number;
+  children: TreeNode[];
+}
+
+interface TreeData {
+  header: SessionHeader | null;
+  tree: TreeNode[];
 }
 
 type LoadState = "idle" | "loading" | "error";
@@ -577,21 +600,168 @@ function isRenderable(entry: SessionEntry): boolean {
   return false;
 }
 
+/**
+ * Build a map of entry ID → number of children from the tree structure.
+ * Used to detect branch points (entries with >1 child).
+ */
+function buildChildCountMap(nodes: TreeNode[]): Map<string, number> {
+  const map = new Map<string, number>();
+
+  function walk(node: TreeNode): void {
+    map.set(node.id, node.childCount);
+    for (const child of node.children) {
+      walk(child);
+    }
+  }
+
+  for (const root of nodes) {
+    walk(root);
+  }
+
+  return map;
+}
+
+/**
+ * Build a map of entry ID → child TreeNode[] from the tree structure.
+ * Used when opening the branch selector.
+ */
+function buildChildrenMap(nodes: TreeNode[]): Map<string, TreeNode[]> {
+  const map = new Map<string, TreeNode[]>();
+
+  function walk(node: TreeNode): void {
+    if (node.children.length > 0) {
+      map.set(node.id, node.children);
+    }
+    for (const child of node.children) {
+      walk(child);
+    }
+  }
+
+  for (const root of nodes) {
+    walk(root);
+  }
+
+  return map;
+}
+
+/**
+ * Count messages from a tree node down to its deepest leaf (depth-first, first child).
+ */
+function countBranchDepth(node: TreeNode): number {
+  let count = 1;
+  let current = node;
+  while (current.children.length > 0) {
+    count++;
+    current = current.children[0];
+  }
+  return count;
+}
+
+/**
+ * Get the leaf node following the first-child path from a given node.
+ */
+function getLeafNode(node: TreeNode): TreeNode {
+  let current = node;
+  while (current.children.length > 0) {
+    current = current.children[0];
+  }
+  return current;
+}
+
+/**
+ * Collect all leaf nodes (branches) from the tree.
+ * Each leaf represents a unique branch path.
+ */
+function collectAllBranches(nodes: TreeNode[]): TreeBranch[] {
+  const branches: TreeBranch[] = [];
+
+  function walkToLeaves(node: TreeNode, path: TreeNode[]): void {
+    const currentPath = [...path, node];
+    if (node.children.length === 0) {
+      // This is a leaf — represents a complete branch
+      const messageNodes = currentPath.filter(
+        (n) => n.type === "message"
+      );
+      const pathDesc = messageNodes
+        .slice(0, 3)
+        .map((n) => {
+          const preview = n.preview.slice(0, 40);
+          return preview || n.role || n.type;
+        })
+        .join(" → ");
+
+      branches.push({
+        leafId: node.id,
+        pathDescription: messageNodes.length > 3 ? pathDesc + " → …" : pathDesc,
+        messageCount: currentPath.length,
+        leafPreview: node.preview,
+        isActive: false, // Caller sets this
+      });
+    } else {
+      for (const child of node.children) {
+        walkToLeaves(child, currentPath);
+      }
+    }
+  }
+
+  for (const root of nodes) {
+    walkToLeaves(root, []);
+  }
+
+  return branches;
+}
+
 export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.Element {
   const [data, setData] = useState<SessionDetailData | null>(null);
+  const [treeData, setTreeData] = useState<TreeData | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [collapsedMap, setCollapsedMap] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
+  const [currentLeafId, setCurrentLeafId] = useState<string | null>(null);
+  const [branchSelectorOpen, setBranchSelectorOpen] = useState(false);
+  const [branchSelectorEntryId, setBranchSelectorEntryId] = useState<string | null>(null);
+  const [treeOverviewOpen, setTreeOverviewOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
-  const fetchSession = useCallback(async () => {
+  // Compute child count map and children map from tree data
+  const childCountMap = useMemo(
+    () => (treeData ? buildChildCountMap(treeData.tree) : new Map<string, number>()),
+    [treeData]
+  );
+  const childrenMap = useMemo(
+    () => (treeData ? buildChildrenMap(treeData.tree) : new Map<string, TreeNode[]>()),
+    [treeData]
+  );
+
+  // Compute set of entry IDs on current branch for branch indicator active state
+  const currentBranchIds = useMemo(() => {
+    if (!data) return new Set<string>();
+    return new Set(data.entries.map((e) => e.id));
+  }, [data]);
+
+  // Compute all branches for tree overview
+  const allBranches = useMemo((): TreeBranch[] => {
+    if (!treeData) return [];
+    const branches = collectAllBranches(treeData.tree);
+    // Only show tree overview if there are actual branches (>1 leaf)
+    if (branches.length <= 1) return [];
+    // Mark active branch
+    const activeLeaf = currentLeafId ?? data?.entries[data.entries.length - 1]?.id;
+    return branches.map((b) => ({
+      ...b,
+      isActive: b.leafId === activeLeaf,
+    }));
+  }, [treeData, currentLeafId, data]);
+
+  const fetchSession = useCallback(async (leafId?: string) => {
     setLoadState("loading");
     setErrorMessage("");
     try {
-      const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}`);
+      const leafParam = leafId ? `?leafId=${encodeURIComponent(leafId)}` : "";
+      const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}${leafParam}`);
       if (res.status === 404) {
         setErrorMessage("Session not found");
         setLoadState("error");
@@ -603,6 +773,9 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
       const result: SessionDetailData = await res.json();
       setData(result);
       setLoadState("idle");
+      if (leafId) {
+        setCurrentLeafId(leafId);
+      }
 
       // Initialize collapsed state for all entries
       const initialCollapsed: Record<string, boolean> = {};
@@ -619,9 +792,22 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
     }
   }, [sessionId]);
 
+  const fetchTree = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/tree/${encodeURIComponent(sessionId)}`);
+      if (res.ok) {
+        const result: TreeData = await res.json();
+        setTreeData(result);
+      }
+    } catch {
+      // Tree data is supplementary — don't fail the page if it errors
+    }
+  }, [sessionId]);
+
   useEffect(() => {
     void fetchSession();
-  }, [fetchSession]);
+    void fetchTree();
+  }, [fetchSession, fetchTree]);
 
   // Track scroll position to show/hide "jump to bottom" button
   useEffect(() => {
@@ -657,6 +843,54 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
+  /** Handle selecting a branch from the branch selector */
+  const handleSelectBranch = useCallback((childId: string) => {
+    // Find the leaf of the selected child branch in the tree
+    if (!treeData) return;
+
+    function findNode(nodes: TreeNode[], targetId: string): TreeNode | null {
+      for (const node of nodes) {
+        if (node.id === targetId) return node;
+        const found = findNode(node.children, targetId);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    const childNode = findNode(treeData.tree, childId);
+    if (childNode) {
+      const leaf = getLeafNode(childNode);
+      void fetchSession(leaf.id);
+    }
+  }, [treeData, fetchSession]);
+
+  /** Handle selecting a branch from the tree overview */
+  const handleSelectTreeBranch = useCallback((leafId: string) => {
+    void fetchSession(leafId);
+  }, [fetchSession]);
+
+  /** Open branch selector for a specific entry */
+  const openBranchSelector = useCallback((entryId: string) => {
+    setBranchSelectorEntryId(entryId);
+    setBranchSelectorOpen(true);
+  }, []);
+
+  /** Compute branch options for the currently open branch selector */
+  const branchOptions = useMemo((): BranchOption[] => {
+    if (!branchSelectorEntryId || !childrenMap.has(branchSelectorEntryId)) return [];
+    const children = childrenMap.get(branchSelectorEntryId) ?? [];
+    return children.map((child) => {
+      const leaf = getLeafNode(child);
+      return {
+        childId: child.id,
+        preview: child.preview,
+        depth: countBranchDepth(child),
+        leafPreview: leaf.preview,
+        isActive: currentBranchIds.has(child.id),
+      };
+    });
+  }, [branchSelectorEntryId, childrenMap, currentBranchIds]);
+
   return (
     <div ref={scrollContainerRef} class="min-h-screen bg-bg-app" style="-webkit-overflow-scrolling: touch;">
       {/* Header */}
@@ -674,13 +908,23 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
               : "Session"}
           </Title>
           {data && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={toggleAll}
-            >
-              {allCollapsed ? "Expand" : "Collapse"}
-            </Button>
+            <div class="flex items-center gap-1">
+              {allBranches.length > 0 && (
+                <IconButton
+                  label="Tree overview"
+                  onClick={() => setTreeOverviewOpen(true)}
+                >
+                  ⑂
+                </IconButton>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={toggleAll}
+              >
+                {allCollapsed ? "Expand" : "Collapse"}
+              </Button>
+            </div>
           )}
         </Container>
       </div>
@@ -707,6 +951,7 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
               if (!isRenderable(entry)) return null;
               const rendered = renderEntry(entry);
               if (!rendered) return null;
+              const branchCount = childCountMap.get(entry.id) ?? 0;
               return (
                 <div key={entry.id}>
                   <CollapsibleEntry
@@ -716,6 +961,16 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
                   >
                     {rendered}
                   </CollapsibleEntry>
+                  {branchCount > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => openBranchSelector(entry.id)}
+                      class="mt-1 min-h-[var(--spacing-touch)] flex items-center gap-2 px-3 py-1 active:opacity-70 transition-opacity duration-100"
+                      aria-label={`${branchCount} branches from this point`}
+                    >
+                      <Badge variant="accent">⑂ {branchCount} branches</Badge>
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -737,6 +992,22 @@ export function SessionDetail({ sessionId, onBack }: SessionDetailProps): JSX.El
           ↓
         </button>
       )}
+
+      {/* Branch selector BottomSheet */}
+      <BranchSelector
+        open={branchSelectorOpen}
+        onClose={() => setBranchSelectorOpen(false)}
+        branches={branchOptions}
+        onSelectBranch={handleSelectBranch}
+      />
+
+      {/* Tree overview BottomSheet */}
+      <TreeOverview
+        open={treeOverviewOpen}
+        onClose={() => setTreeOverviewOpen(false)}
+        branches={allBranches}
+        onSelectBranch={handleSelectTreeBranch}
+      />
     </div>
   );
 }

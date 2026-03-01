@@ -12,22 +12,33 @@ From [PRD 001](../PRD/001-sol.md) Section 2.3:
 
 ## Implementation
 
-> **Note:** This section is completed by the implementation agent.
-
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/server.ts` | `/api/tree/:id` endpoint |
-| `public/index.html` | Branch indicators and navigation UI |
+| `src/sessions.ts` | Tree serialization (`getSessionTree`, `getSessionBranch`) and preview extraction |
+| `src/app.ts` | `/api/tree/:id` route, updated `/api/session/:id` with `?leafId=` query param |
+| `frontend/src/components/SessionDetail.tsx` | Branch indicators at branch points, tree overview toggle in header |
+| `frontend/src/components/BranchSelector.tsx` | `BranchSelector` and `TreeOverview` BottomSheet components |
 
 ### Data Flow
 
-{To be filled during implementation.}
+1. `SessionDetail` fetches both `/api/session/:id` (for entries) and `/api/tree/:id` (for tree structure) on mount.
+2. Tree data is used to build a `childCountMap` — entries with >1 child show a "⑂ N branches" Badge indicator.
+3. Tapping a branch indicator opens `BranchSelector` BottomSheet with sibling branch previews (first message, depth, leaf preview).
+4. Selecting a branch finds the leaf of that subtree and re-fetches `/api/session/:id?leafId=<leafId>` to get the new branch path.
+5. The tree overview button (⑂ in header) opens `TreeOverview` BottomSheet listing all leaf-to-root branches with descriptions.
 
 ### Key Functions
 
-{To be filled during implementation.}
+| Function | Location | Purpose |
+|----------|----------|---------|
+| `getSessionTree()` | `src/sessions.ts` | Opens session via SDK, calls `sm.getTree()`, serializes to `TreeNodeResponse[]` |
+| `getSessionBranch()` | `src/sessions.ts` | Calls `sm.getBranch(leafId)` for branch-specific entry retrieval |
+| `extractEntryPreview()` | `src/sessions.ts` | Extracts short preview text from any entry type for tree node summaries |
+| `serializeTreeNode()` | `src/sessions.ts` | Recursively converts `SessionTreeNode` to API response format |
+| `buildChildCountMap()` | `SessionDetail.tsx` | Builds entry ID → child count map for branch point detection |
+| `collectAllBranches()` | `SessionDetail.tsx` | Walks tree to collect all leaf paths for tree overview |
 
 ## Rationale
 
