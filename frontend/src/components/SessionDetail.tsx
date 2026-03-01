@@ -195,6 +195,7 @@ interface SessionDetailProps {
   sessionId: string;
   onBack: () => void;
   searchQuery?: string;
+  onOpenFiles?: () => void;
 }
 
 /** Max characters before a message is considered "long" and collapsed by default */
@@ -746,7 +747,7 @@ function collectAllBranches(nodes: TreeNode[]): TreeBranch[] {
   return branches;
 }
 
-export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailProps): JSX.Element {
+export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: SessionDetailProps): JSX.Element {
   const [data, setData] = useState<SessionDetailData | null>(null);
   const [treeData, setTreeData] = useState<TreeData | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
@@ -1079,6 +1080,15 @@ export function SessionDetail({ sessionId, onBack, searchQuery }: SessionDetailP
               )}
               {isRpcConnected && (
                 <Badge variant="accent">Live</Badge>
+              )}
+              {onOpenFiles && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onOpenFiles}
+                >
+                  📁 Files
+                </Button>
               )}
               {allBranches.length > 0 && (
                 <IconButton

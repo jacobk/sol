@@ -44,6 +44,17 @@ vi.mock("./session-watcher.js", () => ({
   isWatching: (...args: unknown[]) => mockIsWatching(...(args as [string])),
 }));
 
+// Mock the files module before importing app
+const mockGetGitStatus = vi.fn();
+const mockGetFileContent = vi.fn();
+const mockGetGitDiff = vi.fn();
+
+vi.mock("./files.js", () => ({
+  getGitStatus: (...args: unknown[]) => mockGetGitStatus(...args),
+  getFileContent: (...args: unknown[]) => mockGetFileContent(...args),
+  getGitDiff: (...args: unknown[]) => mockGetGitDiff(...args),
+}));
+
 const { app } = await import("./app.js");
 
 function makeSessionInfo(overrides: Partial<SessionInfo> = {}): SessionInfo {
@@ -317,5 +328,186 @@ describe("GET /api/session/:id/state", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ type: "state", model: "claude-3.5-sonnet", streaming: false });
     expect(mockSendCommand).toHaveBeenCalledWith("sess-001", { type: "get_state" });
+  });
+});
+
+// --- File Inspector Endpoint Tests ---
+
+describe("GET /api/files/:id", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 for unknown session", async () => {
+    mockListAll.mockResolvedValue([]);
+
+    const res = await request(app).get("/api/files/nonexistent");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Session not found");
+  });
+
+  it("returns 404 when cwd is not a git repo", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001", cwd: "/tmp/no-git" }),
+    ]);
+    mockGetGitStatus.mockResolvedValue(null);
+
+    const res = await request(app).get("/api/files/sess-001");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not a git repository/i);
+  });
+
+  it("returns file list on success", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001", cwd: "/mock/project" }),
+    ]);
+    mockGetGitStatus.mockResolvedValue([
+      { path: "src/app.ts", status: "modified" },
+      { path: "README.md", status: "added" },
+    ]);
+
+    const res = await request(app).get("/api/files/sess-001");
+
+    expect(res.status).toBe(200);
+    expect(res.body.cwd).toBe("/mock/project");
+    expect(res.body.files).toHaveLength(2);
+    expect(res.body.files[0]).toEqual({ path: "src/app.ts", status: "modified" });
+  });
+
+  it("returns 500 on unexpected error", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetGitStatus.mockRejectedValue(new Error("exec failed"));
+
+    const res = await request(app).get("/api/files/sess-001");
+
+    expect(res.status).toBe(500);
+  });
+});
+
+describe("GET /api/files/:id/content", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 for unknown session", async () => {
+    mockListAll.mockResolvedValue([]);
+
+    const res = await request(app).get("/api/files/nonexistent/content?path=README.md");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Session not found");
+  });
+
+  it("returns 400 when path param is missing", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+
+    const res = await request(app).get("/api/files/sess-001/content");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/path/i);
+  });
+
+  it("returns 403 for path traversal attempt", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetFileContent.mockResolvedValue(null);
+
+    const res = await request(app).get("/api/files/sess-001/content?path=../../../etc/passwd");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/invalid file path/i);
+  });
+
+  it("returns 404 when file does not exist", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetFileContent.mockRejectedValue(new Error("ENOENT: no such file"));
+
+    const res = await request(app).get("/api/files/sess-001/content?path=nonexistent.ts");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+  });
+
+  it("returns file content on success", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetFileContent.mockResolvedValue("console.log('hello');");
+
+    const res = await request(app).get("/api/files/sess-001/content?path=src/index.ts");
+
+    expect(res.status).toBe(200);
+    expect(res.body.path).toBe("src/index.ts");
+    expect(res.body.content).toBe("console.log('hello');");
+  });
+});
+
+describe("GET /api/files/:id/diff", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 404 for unknown session", async () => {
+    mockListAll.mockResolvedValue([]);
+
+    const res = await request(app).get("/api/files/nonexistent/diff?path=file.ts");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Session not found");
+  });
+
+  it("returns 400 when path param is missing", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+
+    const res = await request(app).get("/api/files/sess-001/diff");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/path/i);
+  });
+
+  it("returns 404 for non-git repo or invalid path", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetGitDiff.mockResolvedValue(null);
+
+    const res = await request(app).get("/api/files/sess-001/diff?path=file.ts");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns diff on success", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetGitDiff.mockResolvedValue("diff --git a/file.ts b/file.ts\n+added line");
+
+    const res = await request(app).get("/api/files/sess-001/diff?path=file.ts");
+
+    expect(res.status).toBe(200);
+    expect(res.body.path).toBe("file.ts");
+    expect(res.body.diff).toContain("+added line");
+  });
+
+  it("returns 500 on unexpected error", async () => {
+    mockListAll.mockResolvedValue([
+      makeSessionInfo({ id: "sess-001" }),
+    ]);
+    mockGetGitDiff.mockRejectedValue(new Error("exec failed"));
+
+    const res = await request(app).get("/api/files/sess-001/diff?path=file.ts");
+
+    expect(res.status).toBe(500);
   });
 });

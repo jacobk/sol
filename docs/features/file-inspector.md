@@ -26,11 +26,17 @@ From [PRD 001](../PRD/001-sol.md) Section 2.4:
 
 ### Data Flow
 
-{To be filled during implementation.}
+1. User taps "📁 Files" in `SessionDetail` header → navigates to `FileList` view
+2. `FileList` fetches `GET /api/files/:id` → Express resolves session cwd via `findSessionById()`, runs `getGitStatus(cwd)` which executes `git status --porcelain`, returns parsed file list
+3. User taps a file → navigates to `FileViewer` which fetches `GET /api/files/:id/content?path=<file>` → Express reads file via `getFileContent(cwd, path)` with path traversal protection
+4. User taps "Diff" → navigates to `DiffViewer` which fetches `GET /api/files/:id/diff?path=<file>` → Express runs `getGitDiff(cwd, path)` via `git diff`
 
 ### Key Functions
 
-{To be filled during implementation.}
+- `getGitStatus(cwd)` — Runs `git status --porcelain`, parses output into `GitFileStatus[]` (path + status)
+- `getFileContent(cwd, filePath)` — Validates path against directory traversal, reads file via `fs.readFile`
+- `getGitDiff(cwd, filePath)` — Runs `git diff --cached` and `git diff` for staged+unstaged changes; falls back to `git diff --no-index` for untracked files
+- `validateFilePath(cwd, filePath)` — Security function ensuring resolved path stays within cwd
 
 ## Rationale
 
@@ -40,7 +46,8 @@ From [PRD 001](../PRD/001-sol.md) Section 2.4:
 - **Direct `fs` reads for content:** File contents are read directly from disk rather than going through pi RPC, since Sol has filesystem access and this avoids unnecessary subprocess overhead for read-only operations.
 - **Shiki for syntax highlighting:** VS Code-quality highlighting with lazy grammar loading keeps the initial bundle small while supporting all common languages.
 - **diff2html in line-by-line mode:** Side-by-side diffs don't fit on a 390px iPhone screen. Line-by-line mode stacks old/new lines vertically, which works well on mobile.
-- **Markdown toggle:** Rendered markdown is the default for `.md` files, with a tap to switch to raw source. Developers reviewing agent-written docs need both views.
+- **Markdown toggle:** Rendered markdown is the default for `.md` files, with a tap to switch to raw source. Developers reviewing agent-written docs need both views. The rendered view uses a custom `.markdown-prose` stylesheet (`index.css`) that maps all typographic elements (headings, lists, blockquotes, code, tables, links, horizontal rules) to the project's design tokens for consistent dark-theme readability.
+- **Tailwind Typography plugin:** `@tailwindcss/typography` is installed as a dependency, but prose styling is handled via the hand-tuned `.markdown-prose` class for precise control over the OLED dark theme. The Typography plugin remains available for any future prose needs elsewhere.
 
 ### ADR References
 

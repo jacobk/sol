@@ -2,7 +2,7 @@
 
 **Related:** ADR 001, ADR 005, PRD 001 Section 3.5
 **Feature:** [File Inspector](../features/file-inspector.md)
-**Status:** Ready for Implementation (depends on TICKET-001, TICKET-003)
+**Status:** Changes Requested
 **Created:** 2026-03-01
 
 ## Context to Load
@@ -90,3 +90,39 @@ curl 'http://localhost:8081/api/files/<id>/content?path=README.md'
 | NEW: `frontend/src/components/FileViewer.tsx` | Syntax highlighted file viewer with markdown toggle |
 | NEW: `frontend/src/components/DiffViewer.tsx` | Line-by-line diff viewer |
 | MODIFY: `frontend/src/components/SessionDetail.tsx` | Add files navigation |
+
+---
+
+## Review Feedback (2026-03-01)
+
+**Result:** ❌ Changes Requested
+
+### What's Complete
+
+All functional requirements from the ticket are implemented correctly:
+- Backend module `src/files.ts` with proper path validation
+- Three API endpoints in `src/app.ts`
+- Frontend components (FileList, FileViewer, DiffViewer)
+- SessionDetail integration with "📁 Files" button
+- Shiki syntax highlighting with lazy loading
+- diff2html in line-by-line mode
+- Markdown rendered/raw toggle with `.markdown-prose` styling
+
+ADR alignment verified (ADR 001 for libraries, ADR 005 for fs-based file access).
+
+### Required Changes: Add Tests
+
+Per PRD 3.9 and Constitution Rule 10:
+
+1. **Create `src/files.test.ts`** with unit tests for:
+   - `getGitStatus()` — parsing various porcelain output scenarios, handling non-git directories (returns null)
+   - `validateFilePath()` — path traversal attempts (`../`, absolute paths), valid relative paths
+   - `getFileContent()` — successful reads, path validation rejection (returns null)
+   - `getGitDiff()` — staged vs unstaged diffs, non-git repo handling
+
+2. **Add API tests to `src/app.test.ts`** for:
+   - `GET /api/files/:id` — 404 for unknown session, 404 for non-git cwd, success with file list
+   - `GET /api/files/:id/content` — 400 missing path param, 403 path traversal, 404 file not found, success
+   - `GET /api/files/:id/diff` — 400 missing path param, 404 for non-git repo, success with diff
+
+The path validation (`validateFilePath`) is specifically called out as security-critical in the Maintainability section — test coverage is mandatory.

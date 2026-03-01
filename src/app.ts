@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { listGroupedSessions, getSessionById, getSessionTree, getSessionBranch, searchSessions, searchSessionEntries, findSessionById } from "./sessions.js";
 import { spawnRpc, sendCommand, onEvent, offEvent, isConnected, killAllRpc, type RpcEventCallback } from "./rpc.js";
 import { startWatching, onEntry, offEntry, isWatching, stopAllWatchers, type SessionEntryCallback } from "./session-watcher.js";
+import { getGitStatus, getFileContent, getGitDiff } from "./files.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -303,6 +304,91 @@ app.get("/api/session/:id/state", (req, res) => {
     clearTimeout(timeout);
     offEvent(sessionId, listener);
     res.status(500).json({ error: "Failed to send command to RPC subprocess" });
+  }
+});
+
+// --- File Inspector Endpoints ---
+
+// Get git working tree changes for a session's cwd
+app.get("/api/files/:id", async (req, res) => {
+  try {
+    const session = await findSessionById(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    const files = await getGitStatus(session.cwd);
+    if (files === null) {
+      res.status(404).json({ error: "Session cwd is not a git repository" });
+      return;
+    }
+
+    res.json({ cwd: session.cwd, files });
+  } catch (err) {
+    console.error("Failed to get git status:", err);
+    res.status(500).json({ error: "Failed to get git status" });
+  }
+});
+
+// Get file contents (with path traversal protection)
+app.get("/api/files/:id/content", async (req, res) => {
+  try {
+    const session = await findSessionById(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    const filePath = typeof req.query.path === "string" ? req.query.path : "";
+    if (!filePath) {
+      res.status(400).json({ error: "Missing required query parameter: path" });
+      return;
+    }
+
+    const content = await getFileContent(session.cwd, filePath);
+    if (content === null) {
+      res.status(403).json({ error: "Invalid file path" });
+      return;
+    }
+
+    res.json({ path: filePath, content });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("ENOENT")) {
+      res.status(404).json({ error: "File not found" });
+      return;
+    }
+    console.error("Failed to read file:", err);
+    res.status(500).json({ error: "Failed to read file" });
+  }
+});
+
+// Get git diff for a file
+app.get("/api/files/:id/diff", async (req, res) => {
+  try {
+    const session = await findSessionById(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    const filePath = typeof req.query.path === "string" ? req.query.path : "";
+    if (!filePath) {
+      res.status(400).json({ error: "Missing required query parameter: path" });
+      return;
+    }
+
+    const diff = await getGitDiff(session.cwd, filePath);
+    if (diff === null) {
+      res.status(404).json({ error: "Not a git repository or invalid path" });
+      return;
+    }
+
+    res.json({ path: filePath, diff });
+  } catch (err) {
+    console.error("Failed to get git diff:", err);
+    res.status(500).json({ error: "Failed to get git diff" });
   }
 });
 
