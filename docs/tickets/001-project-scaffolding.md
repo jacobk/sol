@@ -2,7 +2,7 @@
 
 **Related:** ADR 001, ADR 003, PRD 001 Section 3.9
 **Feature:** All (foundation)
-**Status:** Ready for Implementation
+**Status:** Changes Requested
 **Created:** 2026-03-01
 
 ## Context to Load
@@ -89,3 +89,21 @@ npm run build:frontend                     # Vite build succeeds
 | NEW: `frontend/vite.config.ts` | Vite config with API proxy and Preact plugin |
 | MODIFY: `package.json` | Add frontend dependencies and scripts |
 | MODIFY: `tsconfig.json` | Ensure frontend sources are included for type checking |
+
+## Review Feedback (2026-03-01)
+
+**Reviewer decision: Changes Requested**
+
+The implementation is solid overall — type checks pass, builds succeed, architecture matches ADRs. Four issues must be resolved:
+
+### Issue 1: Missing `.gitkeep` in `frontend/src/components/` (Blocker)
+The ticket explicitly requires a `components/` directory scaffold. The directory exists on disk but git won't track it. **Fix:** Add `frontend/src/components/.gitkeep`.
+
+### Issue 2: `app.tsx` should be `App.tsx` (Blocker)
+Per AGENTS.md naming convention: "`PascalCase.tsx` for Preact components." The file exports the `App` component and should be named `App.tsx`. Update the filename and the import in `main.tsx`.
+
+### Issue 3: ADR `public/` vs `frontend/dist/` discrepancy (Blocker)
+ADR 001 and ADR 003 both reference `public/` as the static file serving directory. The implementation uses `frontend/dist/`, which is a better approach but contradicts the ADRs. **Fix:** Update ADR 001 and ADR 003 to say `frontend/dist/` instead of `public/`.
+
+### Issue 4: Unwarranted AGENTS.md addition (Blocker)
+A "Manual Server Verification" section was added to AGENTS.md. This is not specified in the ticket and violates Constitution rule 3 (No Unwarranted Side Effects). **Fix:** Either remove the addition, or if it's considered valuable, create a separate ticket/commit for it and remove it from this changeset.

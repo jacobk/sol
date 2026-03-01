@@ -41,7 +41,7 @@ frontend/              → Preact SPA, built by Vite
   index.html
 ```
 
-Vite dev server proxies `/api/*` to Express on 8081. Production: `vite build` outputs to `public/`, Express serves statically.
+Vite dev server proxies `/api/*` to Express on 8081. Production: `vite build` outputs to `frontend/dist/`, Express serves statically.
 
 ## Consequences
 

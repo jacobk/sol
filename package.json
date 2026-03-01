@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:frontend": "cd frontend && npx vite",
     "start": "tsx src/server.ts",
-    "build": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "build": "tsc --noEmit && cd frontend && npx tsc --noEmit",
+    "build:frontend": "cd frontend && npx vite build",
+    "lint": "tsc --noEmit && cd frontend && npx tsc --noEmit"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "latest",

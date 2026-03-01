@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@theme {
+  /* Placeholder tokens — TICKET-003 will define the full design system */
+  --color-surface: #111827;
+  --color-surface-2: #1f2937;
+  --color-background: #000000;
+  --color-primary: #2563eb;
+  --color-text-main: #f9fafb;
+  --color-text-muted: #9ca3af;
+  --color-border-subtle: #1f2937;
+  --color-state-error: #f87171;
+  --color-state-success: #34d399;
+}

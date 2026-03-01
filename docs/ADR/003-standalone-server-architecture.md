@@ -47,7 +47,7 @@ Port 8081 was chosen to avoid conflicts with common development servers. It is t
 ### Technical
 
 - Express server binds to `0.0.0.0:8081` for Tailscale access
-- Static files served from `public/`
+- Static files served from `frontend/dist/`
 - Historical browsing is stateless — reads session files from disk via the SDK
 - Active sessions are stateful — Sol manages `pi --mode rpc` subprocess lifecycles
 
