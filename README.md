@@ -1,4 +1,4 @@
-# Sol ☀️
+# Sol 👴
 
 A mobile-first web frontend for [pi](https://pi.dev), the CLI-based AI coding agent. Browse historical sessions, send prompts, stream agent responses, inspect modified files, and switch models — all from your phone over Tailscale VPN.
 
