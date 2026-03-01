@@ -16,15 +16,20 @@ npm run dev        # Backend dev server with watch (tsx watch src/server.ts)
 npm run build      # Type-check only (tsc --noEmit) — run before every commit
 npm run lint       # Same as build (tsc --noEmit)
 npm start          # Production server (tsx src/server.ts)
+npm test           # Run all tests (vitest)
+npm run test:watch # Watch mode for development
+npm run test:coverage # Run tests with coverage report
 ```
 
-**No test framework is configured.** There are no test files, no test runner, and no test scripts. Verification is manual (type-check + curl). There is no way to run a single test. Always run `npm run build` before committing to catch type errors.
+Always run `npm run build && npm test` before committing to catch type errors and regressions.
 
 ## Project Structure
 
 ```
 src/
-  server.ts              # Express server entry point (runs via tsx, no JS compilation)
+  app.ts                 # Express app creation, routes, middleware (importable for tests)
+  server.ts              # Server entry point — imports app and calls listen() (runs via tsx)
+  __test__/              # Shared test utilities and mock factories
 docs/
   ADR/                   # Architecture Decision Records — read before architectural changes
   PRD/                   # Product Requirements Documents

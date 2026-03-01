@@ -2,7 +2,7 @@
 
 **Related:** ADR 007, PRD Section 2.7, PRD Section 3.9
 **Feature:** Testing Strategy from docs/features/testing-strategy.md
-**Status:** Ready for Implementation (depends on TICKET-001)
+**Status:** In Review
 **Created:** 2026-03-01
 
 ## Context to Load
