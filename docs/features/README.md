@@ -12,3 +12,4 @@
 | File Inspector | [file-inspector.md](file-inspector.md) | Planned | 001, 005 |
 | Model Switching | [model-switching.md](model-switching.md) | Planned | 005 |
 | Testing Strategy | [testing-strategy.md](testing-strategy.md) | Planned | 007 |
+| UX Overhaul | [ux-overhaul.md](ux-overhaul.md) | Planned | 001, 006 |

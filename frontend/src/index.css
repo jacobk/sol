@@ -20,6 +20,7 @@
   --color-accent: #2563eb;
   --color-accent-hover: #1d4ed8;
   --color-accent-text: #60a5fa;
+  --color-on-accent: #ffffff;
 
   /* Status */
   --color-state-error: #f87171;
@@ -51,6 +52,7 @@ html {
 body {
   margin: 0;
   min-height: 100dvh;
+  overflow-x: hidden;
 }
 
 /* === Markdown Prose — tuned to OLED dark theme tokens === */
@@ -60,6 +62,7 @@ body {
   font-size: 0.9375rem; /* 15px — comfortable mobile reading size */
   line-height: 1.7;
   overflow-wrap: break-word;
+  word-wrap: break-word;
 }
 
 /* --- Headings: clear hierarchy via size, weight, and spacing --- */

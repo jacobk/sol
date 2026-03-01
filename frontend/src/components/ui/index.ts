@@ -12,6 +12,10 @@ export { BottomSheet } from "./BottomSheet.js";
 
 // Chat
 export { ChatBubble } from "./ChatBubble.js";
+export { MarkdownRenderer } from "./MarkdownRenderer.js";
+
+// Navigation
+export { Toolbar } from "./Toolbar.js";
 
 // Metadata
 export { Badge } from "./Badge.js";

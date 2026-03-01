@@ -1,6 +1,6 @@
 import type { JSX } from "preact";
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
-import { ChatBubble, Badge, Metadata } from "./ui/index.js";
+import { ChatBubble, Badge, Metadata, MarkdownRenderer } from "./ui/index.js";
 
 /** Represents a tool execution in progress or completed */
 interface ToolExecution {
@@ -29,7 +29,11 @@ interface StreamingMessageContainerProps {
   onSessionEntry?: (entry: Record<string, unknown>) => void;
 }
 
-/** Individual streaming message renderer — appends text tokens to the DOM */
+/**
+ * Individual streaming message renderer.
+ * - During streaming: shows plain text (for performance)
+ * - When complete: renders markdown
+ */
 function StreamingMessageBubble({
   message,
 }: {
@@ -38,8 +42,11 @@ function StreamingMessageBubble({
   const contentRef = useRef<HTMLDivElement>(null);
   const prevLengthRef = useRef(0);
 
-  // Incrementally append only new text to the DOM
+  // Incrementally append only new text to the DOM during streaming
   useEffect(() => {
+    // Only do incremental updates while streaming
+    if (message.isComplete) return;
+
     const el = contentRef.current;
     if (!el) return;
 
@@ -55,14 +62,27 @@ function StreamingMessageBubble({
     }
 
     prevLengthRef.current = text.length;
-  }, [message.textContent]);
+  }, [message.textContent, message.isComplete]);
+
+  // Reset tracking when message completes (for next message)
+  useEffect(() => {
+    if (message.isComplete) {
+      prevLengthRef.current = 0;
+    }
+  }, [message.isComplete]);
 
   return (
     <ChatBubble role="assistant">
-      <div
-        ref={contentRef}
-        class="whitespace-pre-wrap break-words"
-      />
+      {message.isComplete ? (
+        // Render markdown when complete
+        <MarkdownRenderer content={message.textContent} />
+      ) : (
+        // Plain text during streaming for performance
+        <div
+          ref={contentRef}
+          class="whitespace-pre-wrap break-words"
+        />
+      )}
       {!message.isComplete && (
         <span class="inline-block w-2 h-4 bg-accent animate-pulse ml-0.5 align-text-bottom rounded-sm" />
       )}
@@ -75,7 +95,7 @@ function StreamingMessageBubble({
   );
 }
 
-/** Compact tool execution indicator — collapsed by default, expandable on tap */
+/** Compact tool execution indicator — collapsed by default, expandable on tap (no emoji) */
 function ToolExecutionIndicator({
   tool,
 }: {
@@ -91,19 +111,19 @@ function ToolExecutionIndicator({
     >
       <div class="flex items-center gap-2">
         <span class="text-xs font-medium text-text-muted uppercase tracking-wide">
-          🔧 {tool.toolName}
+          {tool.toolName}
         </span>
         {tool.status === "running" && (
           <span class="w-2 h-2 rounded-full bg-accent animate-pulse" />
         )}
         {tool.status === "done" && (
-          <Metadata>✓</Metadata>
+          <Metadata>Done</Metadata>
         )}
         {tool.status === "error" && (
-          <Badge variant="error">✕</Badge>
+          <Badge variant="error">Error</Badge>
         )}
         <span class="ml-auto text-xs text-text-muted">
-          {expanded ? "▲" : "▼"}
+          {expanded ? "Hide" : "Show"}
         </span>
       </div>
       {expanded && tool.content && (

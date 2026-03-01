@@ -1,16 +1,17 @@
 import type { JSX } from "preact";
-import { useState, useEffect, useCallback, useRef, useMemo } from "preact/hooks";
+import { useState, useEffect, useCallback, useMemo } from "preact/hooks";
 import {
   Badge,
   Body,
-  Button,
   ChatBubble,
   CodeText,
   Container,
   IconButton,
+  MarkdownRenderer,
   Metadata,
   Stack,
   Title,
+  Toolbar,
 } from "./ui/index.js";
 import {
   extractAllContent,
@@ -27,6 +28,8 @@ import {
 import { PromptInput } from "./PromptInput.js";
 import { StreamingMessageContainer } from "./StreamingMessage.js";
 import { ModelSwitcher } from "./ModelSwitcher.js";
+import { stripAnsi } from "../utils/text.js";
+import { useAutoScroll } from "../hooks/useAutoScroll.js";
 
 /** Session entry types mirroring the backend API response */
 
@@ -216,6 +219,15 @@ function formatTokens(count: number): string {
 }
 
 /**
+ * Check if an assistant message has visible text content (not just tool calls).
+ */
+function assistantHasTextContent(content: ContentBlock[]): boolean {
+  return content.some(
+    (b: ContentBlock) => b.type === "text" && b.text.trim().length > 0
+  );
+}
+
+/**
  * Determine whether a message entry should be collapsed by default.
  * User and short assistant text messages stay expanded.
  * Tool results, bash executions, and long messages are collapsed.
@@ -234,10 +246,7 @@ function shouldCollapseByDefault(entry: SessionEntry): boolean {
       return getMessageTextLength(entry) > COLLAPSE_THRESHOLD;
     case "assistant": {
       // Assistant messages: collapse if long or contains only tool calls
-      const hasTextContent = msg.content.some(
-        (b: ContentBlock) => b.type === "text" && b.text.trim().length > 0
-      );
-      if (!hasTextContent) return true; // tool-call-only responses
+      if (!assistantHasTextContent(msg.content)) return true;
       return getMessageTextLength(entry) > COLLAPSE_THRESHOLD;
     }
     case "toolResult":
@@ -315,7 +324,24 @@ function getPreviewText(entry: SessionEntry): string {
   return full.slice(0, 120).trimEnd() + "…";
 }
 
-/** Copy button that shows brief feedback */
+/** Get role label for an entry (no emoji) */
+function getRoleLabel(entry: SessionEntry): string {
+  if (entry.type === "message") {
+    const role = entry.message.role;
+    if (role === "toolResult") return entry.message.toolName;
+    if (role === "bashExecution") return `Bash: ${entry.message.command.slice(0, 40)}`;
+    if (role === "assistant") return "Agent";
+    if (role === "user") return "You";
+    if (role === "compactionSummary") return "Compaction";
+    if (role === "branchSummary") return "Branch";
+    if (role === "custom") return entry.message.customType;
+  } else if (entry.type === "compaction") return "Compaction";
+  else if (entry.type === "branch_summary") return "Branch";
+  else if (entry.type === "custom_message") return entry.customType;
+  return "";
+}
+
+/** Copy button that shows brief feedback (no emoji) */
 function CopyButton({ text }: { text: string }): JSX.Element {
   const [copied, setCopied] = useState(false);
 
@@ -333,7 +359,7 @@ function CopyButton({ text }: { text: string }): JSX.Element {
       class="text-xs text-text-muted active:text-text-primary min-w-[var(--spacing-touch)] min-h-[var(--spacing-touch)] flex items-center justify-center select-none"
       aria-label="Copy message"
     >
-      {copied ? "✓ Copied" : "📋 Copy"}
+      {copied ? "Copied" : "Copy"}
     </button>
   );
 }
@@ -370,36 +396,61 @@ function HighlightText({ text, query }: { text: string; query?: string }): JSX.E
   return <>{parts}</>;
 }
 
-/** Renders content blocks from extractAllContent */
-function ContentBlocks({ blocks, searchQuery }: { blocks: ExtractedContent[]; searchQuery?: string }): JSX.Element {
+/** Renders content blocks from extractAllContent — with markdown for text */
+function ContentBlocks({ blocks, searchQuery, useMarkdown = false }: { blocks: ExtractedContent[]; searchQuery?: string; useMarkdown?: boolean }): JSX.Element {
   return (
     <>
       {blocks.map((block, i) => {
         switch (block.type) {
           case "text":
+            // Use markdown renderer for assistant messages, plain text for others
+            if (useMarkdown && !searchQuery) {
+              return <MarkdownRenderer key={i} content={block.text} />;
+            }
             return (
               <div key={i} class="whitespace-pre-wrap break-words">
                 <HighlightText text={block.text} query={searchQuery} />
               </div>
             );
-          case "thinking":
-            return (
-              <details key={i} class="mt-2">
-                <summary class="text-sm text-text-muted cursor-pointer select-none min-h-[var(--spacing-touch)] flex items-center">
-                  💭 Thinking{block.redacted ? " (redacted)" : ""}
-                </summary>
-                <div class="mt-1 pl-3 border-l-2 border-border-subtle text-sm text-text-muted whitespace-pre-wrap break-words">
-                  <HighlightText text={block.text} query={searchQuery} />
+          case "thinking": {
+            // Thinking text — inline muted italic like pi CLI
+            // Short thinking shown inline, long thinking collapsible
+            const thinkingText = block.text.trim();
+            const isLong = thinkingText.length > 200 || thinkingText.split("\n").length > 3;
+            
+            if (block.redacted) {
+              return (
+                <div key={i} class="text-sm text-text-muted/60 italic">
+                  (thinking redacted)
                 </div>
-              </details>
-            );
-          case "toolCall":
+              );
+            }
+            
+            if (isLong) {
+              // Long thinking — collapsible
+              return (
+                <details key={i} class="mt-1">
+                  <summary class="text-sm text-text-muted/60 italic cursor-pointer select-none">
+                    {thinkingText.slice(0, 100)}…
+                  </summary>
+                  <div class="mt-1 text-sm text-text-muted/60 italic whitespace-pre-wrap break-words">
+                    <HighlightText text={thinkingText} query={searchQuery} />
+                  </div>
+                </details>
+              );
+            }
+            
+            // Short thinking — inline
             return (
-              <div key={i} class="mt-1">
-                <Badge variant="accent">{block.toolName}</Badge>
-                <CodeText class="mt-1 text-xs">{block.toolArgs}</CodeText>
+              <div key={i} class="text-sm text-text-muted/60 italic whitespace-pre-wrap break-words">
+                <HighlightText text={thinkingText} query={searchQuery} />
               </div>
             );
+          }
+          case "toolCall":
+            // Don't render tool calls inline — the tool execution follows as a separate entry
+            // This avoids redundancy (showing both "bash cd /path..." and then "$ cd /path...")
+            return null;
           case "image":
             return (
               <div key={i} class="mt-1 text-text-muted text-sm italic">
@@ -428,7 +479,345 @@ function AssistantMeta({ message }: { message: AssistantMessage }): JSX.Element 
   );
 }
 
-/** Wraps a message with collapsible behavior and copy button */
+/** Number of output lines to show in preview */
+const BASH_PREVIEW_LINES = 5;
+
+/**
+ * Bash execution — terminal-style rendering.
+ * 
+ * Design: Clear command display with scrollable output
+ * - Command prominently shown with $ prefix
+ * - Output in scrollable container (horizontal scroll for long lines)
+ * - ANSI escape sequences stripped
+ */
+function BashExecutionBubble({ message }: { message: BashExecutionMessage }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+
+  // Strip ANSI codes and split output into lines
+  const cleanOutput = message.output ? stripAnsi(message.output) : "";
+  const outputLines = cleanOutput ? cleanOutput.split("\n") : [];
+  const hasMoreOutput = outputLines.length > BASH_PREVIEW_LINES;
+  const previewLines = outputLines.slice(0, BASH_PREVIEW_LINES);
+  const hiddenLines = outputLines.length - BASH_PREVIEW_LINES;
+
+  // Status flags
+  const hasError = message.exitCode !== undefined && message.exitCode !== 0;
+  const wasCancelled = message.cancelled;
+
+  return (
+    <div class="my-2">
+      {/* Command — prominent, scrollable for long commands */}
+      <div class="font-mono text-sm bg-surface rounded-t px-3 py-2 overflow-x-auto">
+        <span class="text-accent-text font-bold select-none">$ </span>
+        <span class="text-text-primary whitespace-pre">{message.command}</span>
+        {hasError && (
+          <span class="text-state-error ml-2">(exit {message.exitCode})</span>
+        )}
+        {wasCancelled && (
+          <span class="text-state-warning ml-2">(cancelled)</span>
+        )}
+      </div>
+
+      {/* Output — scrollable container */}
+      {cleanOutput && (
+        <div class="bg-surface-2 rounded-b border-t border-border-subtle">
+          {expanded ? (
+            // Full output — scrollable both directions
+            <div class="font-mono text-xs text-text-muted p-3 max-h-96 overflow-auto">
+              <pre class="whitespace-pre">{cleanOutput}</pre>
+            </div>
+          ) : (
+            // Preview output — tappable to expand
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              class="w-full text-left font-mono text-xs text-text-muted p-3 active:bg-border-subtle/50 transition-colors"
+            >
+              <pre class="whitespace-pre overflow-x-auto">{previewLines.join("\n")}</pre>
+              {hasMoreOutput && (
+                <div class="text-accent-text mt-1">
+                  … {hiddenLines} more lines — tap to expand
+                </div>
+              )}
+            </button>
+          )}
+          {expanded && hasMoreOutput && (
+            <div class="px-3 pb-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                class="text-xs text-text-muted active:text-text-primary"
+              >
+                ▲ collapse
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Preview line counts per tool type */
+const TOOL_PREVIEW_LINES: Record<string, number> = {
+  read: 10,
+  write: 10,
+  edit: 50, // Diffs can be longer
+  ls: 20,
+  find: 20,
+  grep: 15,
+  webfetch: 10,
+  default: 10,
+};
+
+/** Tool-specific header parsing from content */
+interface ToolHeader {
+  title: string;
+  subtitle?: string;
+}
+
+/**
+ * Parse tool result content to extract useful header info.
+ * 
+ * NOTE: toolResult entries don't include original arguments (path, command, etc).
+ * We try to parse them from the content text where possible.
+ */
+function parseToolHeader(toolName: string, content: string): ToolHeader {
+  const lines = content.split("\n");
+  const firstLine = (lines[0] || "").trim();
+
+  switch (toolName) {
+    case "bash": {
+      // For bash, the first line of output might give context
+      // But we don't have the command - just show "bash" with preview of output
+      if (firstLine) {
+        const preview = firstLine.length > 50 ? firstLine.slice(0, 50) + "…" : firstLine;
+        return { title: "bash", subtitle: preview };
+      }
+      return { title: "bash" };
+    }
+
+    case "read": {
+      // Content IS the file contents - we don't have the path
+      // Just show "read" with line count
+      const lineCount = lines.length;
+      return { title: "read", subtitle: `${lineCount} lines` };
+    }
+
+    case "write": {
+      // Content format: "Successfully wrote X bytes to {path}"
+      const writeMatch = content.match(/(?:wrote|written)\s+\d+\s+bytes\s+to\s+([^\s]+)/i);
+      if (writeMatch) {
+        return { title: writeMatch[1] };
+      }
+      // Fallback: "Wrote to {path}" or just path
+      const pathMatch = content.match(/(?:to|wrote)\s+([\/\w\-_.]+\.\w+)/i);
+      if (pathMatch) {
+        return { title: pathMatch[1] };
+      }
+      return { title: "write" };
+    }
+
+    case "edit": {
+      // Content format: "Successfully replaced text in {path}."
+      const editMatch = content.match(/(?:replaced|edited)\s+(?:text\s+)?in\s+([^\s.]+)/i);
+      if (editMatch) {
+        return { title: editMatch[1] };
+      }
+      return { title: "edit" };
+    }
+
+    case "ls": {
+      // Content IS the directory listing - we don't have the path
+      const fileCount = lines.filter(l => l.trim()).length;
+      return { title: "ls", subtitle: `${fileCount} items` };
+    }
+
+    case "find": {
+      // Content IS the find results - we don't have the pattern
+      const resultCount = lines.filter(l => l.trim()).length;
+      return { title: "find", subtitle: `${resultCount} results` };
+    }
+
+    case "grep": {
+      // Content IS the grep results
+      const matchCount = lines.filter(l => l.trim()).length;
+      return { title: "grep", subtitle: `${matchCount} matches` };
+    }
+
+    case "webfetch": {
+      // Try to find URL in content
+      const urlMatch = content.match(/(https?:\/\/[^\s]+)/);
+      if (urlMatch) {
+        const url = urlMatch[1].length > 40 ? urlMatch[1].slice(0, 40) + "…" : urlMatch[1];
+        return { title: url };
+      }
+      return { title: "webfetch" };
+    }
+
+    default:
+      return { title: toolName };
+  }
+}
+
+/** Check if content looks like a diff */
+function isDiffContent(content: string): boolean {
+  const lines = content.split("\n").slice(0, 10);
+  return lines.some(line => 
+    line.startsWith("+++") || 
+    line.startsWith("---") || 
+    line.startsWith("@@") ||
+    (line.startsWith("+") && !line.startsWith("+++")) ||
+    (line.startsWith("-") && !line.startsWith("---"))
+  );
+}
+
+/**
+ * Tool result — terminal-style rendering with scrollable output.
+ * 
+ * Design: Clear tool name with scrollable content
+ * - Header shows tool name and parsed path
+ * - Content in scrollable container
+ * - Diff content gets +/- coloring
+ */
+function ToolResultBubble({ message }: { message: ToolResultMessage }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+
+  // Extract plain text content and strip ANSI codes
+  const rawContent = message.content
+    .filter((b): b is { type: "text"; text: string } => b.type === "text")
+    .map(b => b.text)
+    .join("\n");
+  const textContent = stripAnsi(rawContent);
+
+  // Parse header from content
+  const header = parseToolHeader(message.toolName, textContent);
+
+  // Get preview line count for this tool
+  const previewLineCount = TOOL_PREVIEW_LINES[message.toolName] ?? TOOL_PREVIEW_LINES.default;
+
+  // Split content into lines
+  const lines = textContent.split("\n");
+  const hasMoreLines = lines.length > previewLineCount;
+  const displayLines = expanded ? lines : lines.slice(0, previewLineCount);
+  const hiddenLines = lines.length - previewLineCount;
+
+  // Check if this is a diff (for edit tool)
+  const isDiff = message.toolName === "edit" || isDiffContent(textContent);
+
+  // For display: tool name, then title (if different), then subtitle
+  const displayTitle = header.title !== message.toolName ? header.title : "";
+
+  return (
+    <div class="my-2">
+      {/* Header — tool name with context info */}
+      <div class="font-mono text-sm bg-surface rounded-t px-3 py-2 flex items-center gap-2 flex-wrap overflow-x-auto">
+        <span class="text-accent-text font-bold">{message.toolName}</span>
+        {displayTitle && (
+          <span class="text-text-primary whitespace-pre">{displayTitle}</span>
+        )}
+        {header.subtitle && (
+          <span class="text-text-muted text-xs">({header.subtitle})</span>
+        )}
+        {message.isError && (
+          <span class="text-state-error text-xs">(error)</span>
+        )}
+      </div>
+
+      {/* Content — scrollable container */}
+      {textContent && (
+        <div class="bg-surface-2 rounded-b border-t border-border-subtle">
+          {expanded ? (
+            // Full content — scrollable both directions
+            <div class="font-mono text-xs text-text-muted p-3 max-h-96 overflow-auto">
+              {isDiff ? (
+                <DiffContent lines={lines} />
+              ) : (
+                <pre class="whitespace-pre">{textContent}</pre>
+              )}
+            </div>
+          ) : (
+            // Preview content — tappable to expand
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              class="w-full text-left font-mono text-xs text-text-muted p-3 active:bg-border-subtle/50 transition-colors"
+            >
+              {isDiff ? (
+                <DiffContent lines={displayLines} />
+              ) : (
+                <pre class="whitespace-pre overflow-x-auto">{displayLines.join("\n")}</pre>
+              )}
+              {hasMoreLines && (
+                <div class="text-accent-text mt-1">
+                  … {hiddenLines} more lines — tap to expand
+                </div>
+              )}
+            </button>
+          )}
+          {expanded && hasMoreLines && (
+            <div class="px-3 pb-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                class="text-xs text-text-muted active:text-text-primary"
+              >
+                ▲ collapse
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Render diff content with +/- coloring */
+function DiffContent({ lines }: { lines: string[] }): JSX.Element {
+  return (
+    <div class="font-mono overflow-hidden">
+      {lines.map((line, i) => {
+        let colorClass = "text-text-muted";
+        if (line.startsWith("+") && !line.startsWith("+++")) {
+          colorClass = "text-state-success";
+        } else if (line.startsWith("-") && !line.startsWith("---")) {
+          colorClass = "text-state-error";
+        } else if (line.startsWith("@@")) {
+          colorClass = "text-accent-text";
+        }
+        return (
+          <div key={i} class={`${colorClass} whitespace-pre-wrap break-all`}>
+            {line}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Sticky collapse button at the top of expanded content — minimal chrome */
+function CollapseButton({ onCollapse }: { onCollapse: () => void }): JSX.Element {
+  return (
+    <div class="sticky top-12 z-[5] flex justify-end -mb-6">
+      <button
+        type="button"
+        onClick={onCollapse}
+        class="text-[10px] text-text-muted/50 active:text-text-primary bg-bg-app/80 backdrop-blur-sm rounded px-2 py-1 min-h-[var(--spacing-touch)] flex items-center justify-center select-none"
+        aria-label="Collapse message"
+      >
+        ▲ collapse
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Wraps a message with collapsible behavior.
+ * 
+ * Design: Minimal chrome — no labels, just content
+ * - Collapsed: compact preview, tap to expand
+ * - Expanded: content + subtle collapse button
+ */
 function CollapsibleEntry({
   entry,
   collapsed,
@@ -442,54 +831,27 @@ function CollapsibleEntry({
 }): JSX.Element | null {
   if (!children) return null;
 
-  const copyText = getCopyText(entry);
-
   if (collapsed) {
     const preview = getPreviewText(entry);
-    // Determine the role label for collapsed preview
-    let roleLabel = "";
-    if (entry.type === "message") {
-      const role = entry.message.role;
-      if (role === "toolResult") roleLabel = `🔧 ${entry.message.toolName}`;
-      else if (role === "bashExecution") roleLabel = `$ ${entry.message.command.slice(0, 60)}`;
-      else if (role === "assistant") roleLabel = "Assistant";
-      else if (role === "compactionSummary") roleLabel = "Compaction";
-      else if (role === "branchSummary") roleLabel = "Branch";
-      else if (role === "custom") roleLabel = entry.message.customType;
-    } else if (entry.type === "compaction") roleLabel = "Compaction";
-    else if (entry.type === "branch_summary") roleLabel = "Branch";
-    else if (entry.type === "custom_message") roleLabel = entry.customType;
 
+    // Collapsed state — compact, tappable preview (no labels)
     return (
       <button
         type="button"
         onClick={onToggle}
-        class="w-full text-left bg-surface rounded-lg px-4 py-3 border-l-3 border-l-border-subtle active:bg-surface-2 transition-colors duration-100 min-h-[var(--spacing-touch)]"
+        class="w-full text-left py-2 px-1 text-text-muted/70 active:text-text-muted transition-colors duration-100 min-h-[var(--spacing-touch)]"
       >
-        {roleLabel && (
-          <span class="text-xs font-medium text-text-muted uppercase tracking-wide block mb-1">
-            {roleLabel}
-          </span>
-        )}
-        <span class="text-sm text-text-muted line-clamp-2">{preview}</span>
+        <span class="text-sm line-clamp-2">{preview}</span>
+        <span class="text-xs text-accent-text ml-1">▼</span>
       </button>
     );
   }
 
+  // Expanded state — content with subtle collapse button
   return (
-    <div>
+    <div class="relative">
+      <CollapseButton onCollapse={onToggle} />
       {children}
-      <div class="flex items-center justify-end gap-1 mt-1">
-        <CopyButton text={copyText} />
-        <button
-          type="button"
-          onClick={onToggle}
-          class="text-xs text-text-muted active:text-text-primary min-w-[var(--spacing-touch)] min-h-[var(--spacing-touch)] flex items-center justify-center select-none"
-          aria-label="Collapse message"
-        >
-          ▲ Less
-        </button>
-      </div>
     </div>
   );
 }
@@ -511,41 +873,18 @@ function renderMessageEntry(entry: SessionMessageEntry, searchQuery?: string): J
       const blocks = extractAllContent(msg.content);
       return (
         <ChatBubble role="assistant">
-          <ContentBlocks blocks={blocks} searchQuery={searchQuery} />
+          <ContentBlocks blocks={blocks} searchQuery={searchQuery} useMarkdown={true} />
           <AssistantMeta message={msg} />
         </ChatBubble>
       );
     }
 
     case "toolResult": {
-      const blocks = extractAllContent(msg.content);
-      return (
-        <ChatBubble role="tool-result" label={msg.toolName}>
-          {msg.isError && (
-            <Badge variant="error" class="mb-2">Error</Badge>
-          )}
-          <ContentBlocks blocks={blocks} searchQuery={searchQuery} />
-        </ChatBubble>
-      );
+      return <ToolResultBubble message={msg} />;
     }
 
     case "bashExecution": {
-      return (
-        <ChatBubble role="tool" label="Bash">
-          <CodeText class="mb-2">$ {msg.command}</CodeText>
-          {msg.output && (
-            <CodeText class="text-xs max-h-64 overflow-y-auto">
-              {msg.output}
-            </CodeText>
-          )}
-          {msg.exitCode !== undefined && msg.exitCode !== 0 && (
-            <Badge variant="error" class="mt-2">Exit {msg.exitCode}</Badge>
-          )}
-          {msg.cancelled && (
-            <Badge variant="warning" class="mt-2">Cancelled</Badge>
-          )}
-        </ChatBubble>
-      );
+      return <BashExecutionBubble message={msg} />;
     }
 
     case "compactionSummary": {
@@ -629,7 +968,11 @@ function renderEntry(entry: SessionEntry, searchQuery?: string): JSX.Element | n
 /** Check if an entry is renderable (has visual output) */
 function isRenderable(entry: SessionEntry): boolean {
   if (entry.type === "message") {
-    if (entry.message.role === "custom" && !entry.message.display) return false;
+    const msg = entry.message;
+    // Skip custom messages that shouldn't display
+    if (msg.role === "custom" && !msg.display) return false;
+    // Skip assistant messages with no text content (only tool calls)
+    if (msg.role === "assistant" && !assistantHasTextContent(msg.content)) return false;
     return true;
   }
   if (entry.type === "compaction" || entry.type === "branch_summary") return true;
@@ -762,10 +1105,18 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
   const [isRpcConnected, setIsRpcConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [activeModel, setActiveModel] = useState<string | undefined>(undefined);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
+
+  // Use the auto-scroll hook
+  const {
+    isAutoScrolling,
+    isAtBottom,
+    scrollToBottom,
+    handleContentChange,
+    enableAutoScroll,
+    bottomRef,
+  } = useAutoScroll({ bottomThreshold: 50 });
 
   // Derive current model from last assistant message in entries
   const lastAssistantModel = useMemo(() => {
@@ -945,19 +1296,6 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     }
   }, [sessionId]);
 
-  // Track scroll position to show/hide "jump to bottom" button
-  useEffect(() => {
-    const handleScroll = (): void => {
-      const scrollTop = window.scrollY;
-      const windowHeight = window.innerHeight;
-      const docHeight = document.documentElement.scrollHeight;
-      // Show button when more than 2 screens from bottom
-      setShowScrollToBottom(docHeight - scrollTop - windowHeight > windowHeight * 2);
-    };
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
-
   // Scroll to first search match after data loads
   useEffect(() => {
     if (!searchQuery || !data || loadState !== "idle") return;
@@ -988,10 +1326,6 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     setAllCollapsed(newAllCollapsed);
   }, [data, allCollapsed]);
 
-  const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
-
   /** Abort the current operation */
   const handleAbort = useCallback(async () => {
     try {
@@ -1003,21 +1337,35 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     }
   }, [sessionId]);
 
-  /** Auto-scroll when new streaming content arrives */
+  /** Called when a new streaming message starts */
   const handleNewStreamingMessage = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
-
-  /** Auto-scroll during streaming if user is near the bottom */
-  const handleStreamActivity = useCallback(() => {
-    const scrollTop = window.scrollY;
-    const windowHeight = window.innerHeight;
-    const docHeight = document.documentElement.scrollHeight;
-    // Auto-scroll if within 1.5 screens of the bottom
-    if (docHeight - scrollTop - windowHeight < windowHeight * 1.5) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (isAutoScrolling) {
+      scrollToBottom();
     }
-  }, []);
+  }, [isAutoScrolling, scrollToBottom]);
+
+  /** Called during streaming activity — show "new messages" pill if not auto-scrolling */
+  const handleStreamActivity = useCallback(() => {
+    if (isAutoScrolling) {
+      handleContentChange();
+    } else {
+      // Show the "new messages" indicator when auto-scroll is paused
+      setHasNewMessages(true);
+    }
+  }, [isAutoScrolling, handleContentChange]);
+
+  /** Handle tapping the "new messages" pill */
+  const handleNewMessagesPillClick = useCallback(() => {
+    setHasNewMessages(false);
+    enableAutoScroll();
+  }, [enableAutoScroll]);
+
+  // Clear "new messages" indicator when user scrolls to bottom
+  useEffect(() => {
+    if (isAtBottom) {
+      setHasNewMessages(false);
+    }
+  }, [isAtBottom]);
 
   /** Handle selecting a branch from the branch selector */
   const handleSelectBranch = useCallback((childId: string) => {
@@ -1067,9 +1415,48 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
     });
   }, [branchSelectorEntryId, childrenMap, currentBranchIds]);
 
+  // Build toolbar actions
+  const toolbarActions = useMemo(() => {
+    const actions = [];
+
+    if (!isRpcConnected) {
+      actions.push({
+        key: "connect",
+        label: isConnecting ? "Connecting…" : "Connect",
+        onClick: () => void connectToSession(),
+        disabled: isConnecting,
+        variant: "primary" as const,
+      });
+    }
+
+    if (onOpenFiles) {
+      actions.push({
+        key: "files",
+        label: "Files",
+        onClick: onOpenFiles,
+      });
+    }
+
+    if (allBranches.length > 0) {
+      actions.push({
+        key: "tree",
+        label: "Tree",
+        onClick: () => setTreeOverviewOpen(true),
+      });
+    }
+
+    actions.push({
+      key: "collapse",
+      label: allCollapsed ? "Expand" : "Collapse",
+      onClick: toggleAll,
+    });
+
+    return actions;
+  }, [isRpcConnected, isConnecting, connectToSession, onOpenFiles, allBranches.length, allCollapsed, toggleAll]);
+
   return (
-    <div ref={scrollContainerRef} class="min-h-screen bg-bg-app" style="-webkit-overflow-scrolling: touch;">
-      {/* Header */}
+    <div class="min-h-screen bg-bg-app" style="-webkit-overflow-scrolling: touch;">
+      {/* Header — minimal with back button and title */}
       <div class="sticky top-0 z-10 bg-bg-app border-b border-border-subtle">
         <Container class="py-3 flex items-center gap-3">
           <IconButton
@@ -1083,55 +1470,26 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
               ? data.header.cwd.split("/").filter(Boolean).pop() ?? "Session"
               : "Session"}
           </Title>
+          {isRpcConnected && (
+            <Badge variant="accent">Live</Badge>
+          )}
           {data && (
-            <div class="flex items-center gap-1">
-              {!isRpcConnected && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={connectToSession}
-                  disabled={isConnecting}
-                >
-                  {isConnecting ? "Connecting…" : "▶ Connect"}
-                </Button>
-              )}
-              {isRpcConnected && (
-                <Badge variant="accent">Live</Badge>
-              )}
-              <ModelSwitcher
-                sessionId={sessionId}
-                isRpcConnected={isRpcConnected}
-                currentModel={currentModel}
-                onModelChange={setActiveModel}
-              />
-              {onOpenFiles && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={onOpenFiles}
-                >
-                  📁 Files
-                </Button>
-              )}
-              {allBranches.length > 0 && (
-                <IconButton
-                  label="Tree overview"
-                  onClick={() => setTreeOverviewOpen(true)}
-                >
-                  ⑂
-                </IconButton>
-              )}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={toggleAll}
-              >
-                {allCollapsed ? "Expand" : "Collapse"}
-              </Button>
-            </div>
+            <ModelSwitcher
+              sessionId={sessionId}
+              isRpcConnected={isRpcConnected}
+              currentModel={currentModel}
+              onModelChange={setActiveModel}
+            />
           )}
         </Container>
       </div>
+
+      {/* Floating toolbar */}
+      {data && toolbarActions.length > 0 && (
+        <div class="fixed top-16 right-4 z-10">
+          <Toolbar actions={toolbarActions} defaultCollapsed={true} />
+        </div>
+      )}
 
       {/* Content */}
       <Container class="py-4">
@@ -1150,21 +1508,31 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         )}
 
         {data && (
-          <Stack direction="vertical" gap={3}>
+          <Stack direction="vertical" gap={2}>
             {data.entries.map((entry) => {
               if (!isRenderable(entry)) return null;
               const rendered = renderEntry(entry, searchQuery);
               if (!rendered) return null;
               const branchCount = childCountMap.get(entry.id) ?? 0;
+
+              // Tool-related entries use their own bubbles with built-in expand/collapse
+              const isSelfContainedTool = entry.type === "message" && 
+                (entry.message.role === "bashExecution" || entry.message.role === "toolResult");
+
               return (
                 <div key={entry.id}>
-                  <CollapsibleEntry
-                    entry={entry}
-                    collapsed={collapsedMap[entry.id] ?? false}
-                    onToggle={() => toggleEntry(entry.id)}
-                  >
-                    {rendered}
-                  </CollapsibleEntry>
+                  {isSelfContainedTool ? (
+                    // Render directly - BashExecutionBubble/ToolResultBubble handle their own state
+                    rendered
+                  ) : (
+                    <CollapsibleEntry
+                      entry={entry}
+                      collapsed={collapsedMap[entry.id] ?? false}
+                      onToggle={() => toggleEntry(entry.id)}
+                    >
+                      {rendered}
+                    </CollapsibleEntry>
+                  )}
                   {branchCount > 1 && (
                     <button
                       type="button"
@@ -1172,7 +1540,7 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
                       class="mt-1 min-h-[var(--spacing-touch)] flex items-center gap-2 px-3 py-1 active:opacity-70 transition-opacity duration-100"
                       aria-label={`${branchCount} branches from this point`}
                     >
-                      <Badge variant="accent">⑂ {branchCount} branches</Badge>
+                      <Badge variant="accent">{branchCount} branches</Badge>
                     </button>
                   )}
                 </div>
@@ -1181,8 +1549,8 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
           </Stack>
         )}
 
-        {/* Bottom anchor for scroll-to-bottom */}
-        <div ref={bottomRef} class={isRpcConnected ? "pb-24" : ""} />
+        {/* Bottom anchor for scroll-to-bottom — with padding for prompt input */}
+        <div ref={bottomRef} class={isRpcConnected ? "pb-28" : "pb-4"} />
       </Container>
 
       {/* Streaming messages (active session only) */}
@@ -1210,12 +1578,24 @@ export function SessionDetail({ sessionId, onBack, searchQuery, onOpenFiles }: S
         </div>
       )}
 
-      {/* Jump to bottom floating button */}
-      {showScrollToBottom && (
+      {/* "New messages" pill — shown when auto-scroll is paused and new content arrives */}
+      {hasNewMessages && !isAtBottom && (
+        <button
+          type="button"
+          onClick={handleNewMessagesPillClick}
+          class={`fixed ${isRpcConnected ? "bottom-20" : "bottom-6"} left-1/2 -translate-x-1/2 z-20 bg-accent text-on-accent rounded-full px-4 py-2 text-sm font-medium shadow-lg active:bg-accent-hover transition-colors duration-100`}
+          aria-label="Jump to new messages"
+        >
+          New messages ↓
+        </button>
+      )}
+
+      {/* Scroll-to-bottom floating button — visible when not at bottom */}
+      {!isAtBottom && !hasNewMessages && (
         <button
           type="button"
           onClick={scrollToBottom}
-          class={`fixed ${isRpcConnected ? "bottom-20" : "bottom-6"} right-6 z-20 bg-accent text-white rounded-full w-12 h-12 flex items-center justify-center shadow-lg active:bg-accent-hover transition-colors duration-100`}
+          class={`fixed ${isRpcConnected ? "bottom-20" : "bottom-6"} right-6 z-20 bg-accent text-on-accent rounded-full w-12 h-12 flex items-center justify-center shadow-lg active:bg-accent-hover transition-colors duration-100`}
           aria-label="Jump to bottom"
         >
           ↓
