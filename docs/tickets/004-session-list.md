@@ -2,7 +2,7 @@
 
 **Related:** ADR 002, PRD 001 Section 3.1
 **Feature:** [Session Discovery](../features/session-discovery.md)
-**Status:** Ready for Implementation (depends on TICKET-001, TICKET-003)
+**Status:** Done
 **Created:** 2026-03-01
 
 ## Context to Load

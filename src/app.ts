@@ -1,6 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listGroupedSessions } from "./sessions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -11,6 +12,17 @@ app.use(express.json());
 // Health check endpoint
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+// Session list endpoint
+app.get("/api/sessions", async (_req, res) => {
+  try {
+    const groups = await listGroupedSessions();
+    res.json(groups);
+  } catch (err) {
+    console.error("Failed to list sessions:", err);
+    res.status(500).json({ error: "Failed to list sessions" });
+  }
 });
 
 // Serve Vite build output in production
