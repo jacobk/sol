@@ -8,11 +8,11 @@ Named after Sol Robeson, Max's mentor in the film *π*.
 
 ```
 ┌──────────────┐   Tailscale   ┌──────────────────────────────────────┐
-│  iPhone /    │───────────────▶│  Sol Server (Express, port 8081)     │
-│  Browser     │   SSE + REST   │                                      │
+│  iPhone /    │──────────────▶│  Sol Server (Express, port 8081)     │
+│  Browser     │   SSE + REST  │                                      │
 └──────────────┘               │  ┌─────────────┐  ┌───────────────┐  │
-                               │  │ pi SDK       │  │ pi --mode rpc │  │
-                               │  │ (read-only)  │  │ (active I/O)  │  │
+                               │  │ pi SDK      │  │ pi --mode rpc │  │
+                               │  │ (read-only) │  │ (active I/O)  │  │
                                │  └─────────────┘  └───────────────┘  │
                                └──────────────────────────────────────┘
 ```
